@@ -1,5 +1,4 @@
 #include <stdint.h>
-#include <unistd.h>
 #include <stddef.h>
 #include <assert.h>
 #include "chip.h"
@@ -24,8 +23,6 @@ typedef struct {
  * N.B. keep in sync with context_{arch}.s 
  */
 #ifdef __x86_64__
-	uintptr_t rax; /* return value */
-	uintptr_t rdi; /* arg0 */
 	uintptr_t rbx;
 	uintptr_t rbp;
 	uintptr_t r10;
@@ -37,7 +34,6 @@ typedef struct {
 	uintptr_t rip;
 	uintptr_t rsp;
 #elif __arm__
-	uintptr_t r0; /* return val and arg0 */
 	uintptr_t r5;
 	uintptr_t r6;
 	uintptr_t r7;
@@ -70,15 +66,6 @@ inline void setreturn(regctx_t *ctx, uintptr_t pc) {
 	return;
 }
 
-inline void setarg0(regctx_t *ctx, uintptr_t arg) {
-#ifdef __x86_64__
-	ctx->rdi = arg;
-#elif __arm__
-	ctx->r0 = arg;
-#endif
-	return;
-}
-
 /* 
  * these need to be defined externally in
  * assembly so that caller-save regs
@@ -92,15 +79,15 @@ inline void setarg0(regctx_t *ctx, uintptr_t arg) {
  * __savectx() returning a non-zero
  * value somewhere else!)
  */
-extern int __savectx(regctx_t*);
-extern noreturn __loadctx(const regctx_t*);
+extern int _savectx(regctx_t*);
+extern noreturn _loadctx(const regctx_t*);
 
 static inline void swapctx(regctx_t *save, const regctx_t *jmp) {
 	/* belts and suspenders */
 	assert(save != jmp);
 
-	if (__savectx(save) == 0) {
-		__loadctx(jmp);
+	if (_savectx(save) == 0) {
+		_loadctx(jmp);
 	}
 	return;
 }
@@ -128,8 +115,9 @@ struct task_s {
 	task_t 	  *next;
 	regctx_t   ctx;    /* saved register state, if not running */
 	int        status; /* STATUS_XXX */
+	char       pad[16];
 	char       stack[4096];
-	char       stktop;
+	char       pad2[16];
 };
 
 /* the global run queue/state */
@@ -241,6 +229,7 @@ static int yield(int block) {
 }
 
 void sched(void) {
+	runq.running->status = STATUS_RUNNABLE;
 	yield(0);
 }
 
@@ -254,16 +243,12 @@ static noreturn run(task_t *task) {
 	assert(task->status == STATUS_RUNNABLE);
 	runq.running = task;
 	task->status = STATUS_RUNNING;
-	__loadctx(&task->ctx);
+	_loadctx(&task->ctx);
 	assert(0 && "unreachable");
 }
 
 /* task exit -- should never return */
 static noreturn taskexit(void) {
-	if (runq.running == &runq.t0) {
-		_exit(0);
-	}
-
 	task_t *old = runq.running;
 	assert(old->status == STATUS_RUNNING);
 	old->status = STATUS_EMPTY;
@@ -313,7 +298,7 @@ void spawn(void (start)(void*), void *data) {
 	t->udata = data;
 	t->start = start;
 	t->status = STATUS_RUNNABLE;
-	setstack(&t->ctx, (uintptr_t)(&t->stktop));
+	setstack(&t->ctx, (uintptr_t)(&t->pad2));
 	setreturn(&t->ctx, (uintptr_t)(__entry));
 	list_pushback(&runq.queue, t);
 	return;

@@ -7,6 +7,7 @@ void spawn(void (start)(void*), void *data);
 /* yield to the scheduler */
 void sched(void);
 
+/* chip defines main() */
 int main(void);
 
 #endif /* __CHIP_H_ */
