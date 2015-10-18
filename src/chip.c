@@ -100,15 +100,6 @@ enum {
 	STATUS_PARKED,   /* was running; waiting for event */
 };
 
-typedef struct task_s task_t;
-
-typedef struct tasklist_s tasklist_t;
-
-struct tasklist_s {
-	task_t *top;
-	task_t *tail;
-};
-
 struct task_s {
 	void      (*start)(void*); 
 	void      *udata;  /* passed to task->start() */
@@ -123,10 +114,10 @@ struct task_s {
 /* the global run queue/state */
 static struct{
 	task_t *running;
-	task_t t0;        /* the root task */
 	tasklist_t queue; /* runnable */
 	int parked;       /* count of parked tasks */
 	tasklist_t begin; /* blocking requests to newtask() */
+	task_t t0;        /* the root task (taskmain()) */
 } runq;
 
 #define MAXTASKS 1024
@@ -142,8 +133,6 @@ static taskslab_t tslab;
 #undef BITSLAB_FN_PREFIX
 
 static noreturn taskexit(void);
-
-static void wait(tasklist_t *l);
 
 task_t *list_pop(tasklist_t *tl) {
 	if (tl->top == NULL) {
@@ -171,29 +160,6 @@ static void list_pushback(tasklist_t *tl, task_t *task) {
 	tl->tail = task;
 	task->next = NULL;
 	return;
-}
-
-static int wake(tasklist_t *tl) {
-	assert(tl != &runq.queue);
-	task_t *task = list_pop(tl);
-	if (task) {
-		task->status = STATUS_RUNNABLE;
-		--runq.parked;
-		list_pushback(&runq.queue, task);
-		return 1;
-	}
-	return 0;
-}
-
-/* mark everything on the
- * list as runnable; returns
- * the number of tasks woken.
- */
- int wakeall(tasklist_t *tl) {
-	assert(tl != &runq.queue);
-	int out = 0;
-	while(wake(tl)) ++out;
-	return out;
 }
 
 /* TODO: netpolling */
@@ -230,7 +196,37 @@ static int yield(int block) {
 
 void sched(void) {
 	runq.running->status = STATUS_RUNNABLE;
-	yield(0);
+	if (!yield(0))
+		runq.running->status = STATUS_RUNNING;
+	return;
+}
+
+/* park task on tasklist; deschedule */
+void wait(tasklist_t *tl) {
+	runq.running->status = STATUS_PARKED;
+	++runq.parked;
+	list_pushback(tl, runq.running);
+	yield(1);
+	return;
+}
+
+int wake(tasklist_t *tl) {
+	assert(tl != &runq.queue);
+	task_t *task = list_pop(tl);
+	if (task) {
+		task->status = STATUS_RUNNABLE;
+		--runq.parked;
+		list_pushback(&runq.queue, task);
+		return 1;
+	}
+	return 0;
+}
+
+int wakeall(tasklist_t *tl) {
+	assert(tl != &runq.queue);
+	int out = 0;
+	while(wake(tl)) ++out;
+	return out;
 }
 
 /* task start */
@@ -271,7 +267,8 @@ static noreturn taskexit(void) {
 	if (next == NULL && runq.parked) {
 		/* find work */
 		netpoll(1);
-		assert(next = list_pop(&runq.queue));
+		next = list_pop(&runq.queue);
+		assert(next && "deadlock!");
 	}
 
 	run(next);
@@ -282,7 +279,8 @@ static noreturn taskexit(void) {
  * executing the given function.
  */
 void spawn(void (start)(void*), void *data) {
-	task_t *t;
+	task_t *t = NULL;
+	int waited = 0;
 	assert(start);
 
 	/* 
@@ -291,25 +289,23 @@ void spawn(void (start)(void*), void *data) {
 	 * a fixed number of tasks.
      */
 	if (runq.begin.top) {
-		wait(&runq.begin);	
+	dowait:
+		wait(&runq.begin);
 	}
 	t = slab_malloc(&tslab);
-	assert(t);
+	if (t == NULL) {
+		if (waited == 0) {
+			waited = 1;
+			goto dowait;
+		}
+		assert(0 && "deadlock!");
+	}
 	t->udata = data;
 	t->start = start;
 	t->status = STATUS_RUNNABLE;
 	setstack(&t->ctx, (uintptr_t)(&t->pad2));
 	setreturn(&t->ctx, (uintptr_t)(__entry));
 	list_pushback(&runq.queue, t);
-	return;
-}
-
-/* park task on tasklist; deschedule */
-static void wait(tasklist_t *tl) {
-	runq.running->status = STATUS_PARKED;
-	++runq.parked;
-	list_pushback(tl, runq.running);
-	yield(1);
 	return;
 }
 
