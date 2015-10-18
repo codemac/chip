@@ -176,6 +176,7 @@ static int yield(int block, tasklist_t *target) {
 	/* pushback currently-running task */
 	assert(other != runq.running);
 	assert(other->status == STATUS_RUNNABLE);
+
 	other->status = STATUS_RUNNING;
 	task_t *this = runq.running;
 	runq.running = other;
@@ -203,9 +204,7 @@ void wait(tasklist_t *tl) {
 }
 
 static void ready(task_t *task) {
-	assert(task->status == STATUS_PARKED);
 	task->status = STATUS_RUNNABLE;
-	--runq.parked;
 	list_pushback(&runq.queue, task);
 }
 
@@ -213,6 +212,8 @@ int wake(tasklist_t *tl) {
 	assert(tl != &runq.queue);
 	task_t *task = list_pop(tl);
 	if (task) {
+		assert(task->status == STATUS_PARKED);
+		--runq.parked;
 		ready(task);
 		return 1;
 	}
@@ -254,10 +255,7 @@ static noreturn taskexit(void) {
 	 * create a new task, mark them
      * as runnable.
 	 */
-	if (runq.begin.top) {
-		task_t *c = list_pop(&runq.begin);
-		ready(c);
-	}
+	wake(&runq.begin);
 	
 	task_t *next = list_pop(&runq.queue);
 	if (next == NULL && runq.parked) {
@@ -298,10 +296,9 @@ void spawn(void (start)(void*), void *data) {
 	}
 	t->udata = data;
 	t->start = start;
-	t->status = STATUS_RUNNABLE;
 	setstack(&t->ctx, (uintptr_t)(&t->pad2));
 	setreturn(&t->ctx, (uintptr_t)(__entry));
-	list_pushback(&runq.queue, t);
+	ready(t);
 	return;
 }
 

@@ -1,25 +1,27 @@
 #include <stdio.h>
+#include <time.h>
+#include <assert.h>
 #include "../chip.h"
+#include "../chipsync.h"
 
 /* 
  * spawn more than MAXTASKS
  * tasks, just to get some
  * coverage of task exhaustion.
  */
-#define INCS 2000
+#define INCS 3000
 
 static int count;
-static tasklist_t adds;
+static sema_t sema;
 
 static void inc(void *data) {
 	if (++count == INCS) {
-		wake(&adds);
+		semrelease(&sema);
 	}
 	return;
 }
 
 int taskmain(void) {
-	int failed = 0;
 	/* 
 	 * so, this is unfortunate.
 	 * on OSX, the first call to puts()
@@ -29,14 +31,19 @@ int taskmain(void) {
 	 */
 	puts("running tests...");
 
+	/* no tasks to run -- should return immediately */
+	sched();
+
 	/* spawn 100 tasks that run 'inc' */
 	for (int i=0; i<INCS; ++i) {
 		spawn(inc, NULL);
 	}
-	wait(&adds);
-	if (count != INCS) {
-		printf("expected %d incs; found %d...\n", INCS, count);
-		failed = 1;
-	}
-	return failed;
+	clock_t t = clock();
+	semacquire(&sema);
+	t = clock() - t;
+	assert(sema.count == 0);
+	assert(count == INCS);
+	printf("%d scheduler hops in %ld clocks.\n", INCS, t);
+	puts("tests OK.");
+	return 0;
 }
