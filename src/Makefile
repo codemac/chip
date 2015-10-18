@@ -1,13 +1,22 @@
 CC := clang
 CFLAGS := -O3 -Wall -Werror
+TSTFLAGS := -g -fsanitize=address -fno-omit-frame-pointer
 ARCH := amd64
 
 %.test: tests/%.c chip.c context_$(ARCH).s
+	$(CC) $(CFLAGS) $(TSTFLAGS) $^ -o $@
+
+%.bench: tests/%.c chip.c context_$(ARCH).s
 	$(CC) $(CFLAGS) $^ -o $@
 
 .PHONY: test
 test: test.test
 	./test.test
 
+.PHONY: bench
+bench: pingpong.bench
+	./pingpong.bench
+
 .PHONY: clean
-	$(RM) *.o *.gch *.test *.out
+clean:
+	$(RM) *.o *.gch *.test *.bench *.out *.dSYM

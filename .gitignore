@@ -1,4 +1,7 @@
 *.test
+*.bench
+*.dSYM
+*~
 *.out
 *.gch
 *.o

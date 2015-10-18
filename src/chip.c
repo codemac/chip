@@ -293,8 +293,8 @@ void spawn(void (start)(void*), void *data) {
 	if (runq.begin.top) {
 		wait(&runq.begin);	
 	}
-
-	assert((t = slab_malloc(&tslab)));
+	t = slab_malloc(&tslab);
+	assert(t);
 	t->udata = data;
 	t->start = start;
 	t->status = STATUS_RUNNABLE;
