@@ -162,7 +162,7 @@ static void list_pushback(tasklist_t *tl, task_t *task) {
  * find a runnable task; call swap 
  * returns 0 if no task is available
  */
-static int yield(int block) {
+static int yield(int block, tasklist_t *target) {
 	task_t *other = list_pop(&runq.queue);
 	if (other == NULL && onpoll != NULL) {
 		onpoll(block);
@@ -179,7 +179,7 @@ static int yield(int block) {
 	other->status = STATUS_RUNNING;
 	task_t *this = runq.running;
 	runq.running = other;
-	list_pushback(&runq.queue, this);
+	list_pushback(target, this);
 	swapctx(&this->ctx, &other->ctx);
 
 	/* we were woken */
@@ -189,7 +189,7 @@ static int yield(int block) {
 
 void sched(void) {
 	runq.running->status = STATUS_RUNNABLE;
-	if (!yield(0))
+	if (yield(0, &runq.queue) == 0)
 		runq.running->status = STATUS_RUNNING;
 	return;
 }
@@ -198,8 +198,7 @@ void sched(void) {
 void wait(tasklist_t *tl) {
 	runq.running->status = STATUS_PARKED;
 	++runq.parked;
-	list_pushback(tl, runq.running);
-	yield(1);
+	yield(1, tl);
 	return;
 }
 
@@ -257,8 +256,7 @@ static noreturn taskexit(void) {
 	 */
 	if (runq.begin.top) {
 		task_t *c = list_pop(&runq.begin);
-		c->status = STATUS_RUNNABLE;
-		list_pushback(&runq.queue, c);
+		ready(c);
 	}
 	
 	task_t *next = list_pop(&runq.queue);
