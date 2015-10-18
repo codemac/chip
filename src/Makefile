@@ -1,6 +1,6 @@
 CC := clang
 CFLAGS := -O3 -Wall -Werror
-TSTFLAGS := -g -fsanitize=address -fno-omit-frame-pointer
+TSTFLAGS := -g -fno-omit-frame-pointer
 ARCH := amd64
 
 %.test: tests/%.c chip.c context_$(ARCH).s
