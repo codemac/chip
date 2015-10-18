@@ -37,7 +37,7 @@ typedef struct task_s task_t;
  * tasklist should be initialized with
  * both fields set to NULL.
  */
-typedef struct tasklist_s {
+typedef struct {
 	task_t *top;
 	task_t *tail;
 } tasklist_t;
@@ -62,5 +62,14 @@ int wake(tasklist_t *list);
  * and returns the number of tasks unblocked.
  */
 int wakeall(tasklist_t *list);
+
+/*
+ * if onpoll is non-NULL,
+ * it is called whenever the
+ * scheduler is looking for work.
+ * 
+ * (this is used by netpollers)
+ */
+void (*onpoll)(int block);
 
 #endif /* __CHIP_H_ */

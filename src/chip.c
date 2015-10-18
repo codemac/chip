@@ -15,11 +15,7 @@
 
 typedef struct {
 /* 
- * we need all callee-saved
- * registers, plus the register
- * used for the 1st argument
- * (see setup())
- *
+ * we need all callee-saved registers
  * N.B. keep in sync with context_{arch}.s 
  */
 #ifdef __x86_64__
@@ -162,17 +158,14 @@ static void list_pushback(tasklist_t *tl, task_t *task) {
 	return;
 }
 
-/* TODO: netpolling */
-static void netpoll(int block) { return; }
-
 /* 
  * find a runnable task; call swap 
  * returns 0 if no task is available
  */
 static int yield(int block) {
 	task_t *other = list_pop(&runq.queue);
-	if (other == NULL) {
-		netpoll(block);
+	if (other == NULL && onpoll != NULL) {
+		onpoll(block);
 		other = list_pop(&runq.queue);
 	}
 	if (other == NULL) {
@@ -210,13 +203,18 @@ void wait(tasklist_t *tl) {
 	return;
 }
 
+static void ready(task_t *task) {
+	assert(task->status == STATUS_PARKED);
+	task->status = STATUS_RUNNABLE;
+	--runq.parked;
+	list_pushback(&runq.queue, task);
+}
+
 int wake(tasklist_t *tl) {
 	assert(tl != &runq.queue);
 	task_t *task = list_pop(tl);
 	if (task) {
-		task->status = STATUS_RUNNABLE;
-		--runq.parked;
-		list_pushback(&runq.queue, task);
+		ready(task);
 		return 1;
 	}
 	return 0;
@@ -265,12 +263,12 @@ static noreturn taskexit(void) {
 	
 	task_t *next = list_pop(&runq.queue);
 	if (next == NULL && runq.parked) {
-		/* find work */
-		netpoll(1);
-		next = list_pop(&runq.queue);
-		assert(next && "deadlock!");
+		if (onpoll) {
+			onpoll(1);
+			next = list_pop(&runq.queue);
+		}
 	}
-
+	assert(next && "deadlock!");
 	run(next);
 }
 

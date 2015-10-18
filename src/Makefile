@@ -19,4 +19,4 @@ bench: pingpong.bench
 
 .PHONY: clean
 clean:
-	$(RM) *.o *.gch *.test *.bench *.out *.dSYM
+	$(RM) -r *.o *.gch *.test *.bench *.out *.dSYM
