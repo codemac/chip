@@ -1,11 +1,11 @@
 .globl _savectx
 _savectx:
-	stmia r0!, {r5-r14}
-	mov   r0, #0
-	mov   pc, lr
+	stm r0, {r5-r14}
+	mov r0, #0
+	mov pc, lr
 
 .globl _loadctx
 _loadctx:
-	ldmia r0!, {r5-r14}
-	mov   r0, #1
-	mov   pc, lr 
+	ldm  r0, {r5-r14}
+	mov  r0, #1
+	mov  pc, lr 
