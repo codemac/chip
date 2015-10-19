@@ -1,15 +1,7 @@
 #include <stdint.h>
 #include <stddef.h>
 #include <assert.h>
-#include "chip.h"
-
-#ifdef __x86_64__
-#define NUM_SAVED_REGS 11
-#elif __arm__
-#define NUM_SAVED_REGS 10
-#else
-#error "unsupported arch!"
-#endif
+#include "runtime.h"
 
 #define noreturn void __attribute__((noreturn))
 
@@ -43,21 +35,13 @@ typedef struct {
 #endif
 } regctx_t;
 
-
-inline void setstack(regctx_t *ctx, uintptr_t sp) {
+static inline void setup(regctx_t *ctx, uintptr_t stack, uintptr_t retpc) {
 #ifdef __x86_64__
-	ctx->rsp = sp;
+	ctx->rsp = stack;
+	ctx->rip = retpc;
 #elif __arm__
-	ctx->r13 = sp;
-#endif
-	return;
-}
-
-inline void setreturn(regctx_t *ctx, uintptr_t pc) {
-#ifdef __x86_64__
-	ctx->rip = pc;
-#elif __arm__
-	ctx->r14 = pc; /* lr = pc */
+	ctx->r13 = stack;
+	ctx->r14 = retpc;
 #endif
 	return;
 }
@@ -97,9 +81,9 @@ enum {
 };
 
 struct task_s {
-	void      (*start)(void*); 
-	void      *udata;  /* passed to task->start() */
-	task_t 	  *next;
+	void       (*start)(void*); 
+	void       *udata;  /* passed to task->start() */
+	task_t 	   *next;
 	regctx_t   ctx;    /* saved register state, if not running */
 	int        status; /* STATUS_XXX */
 	char       pad[16];
@@ -109,13 +93,14 @@ struct task_s {
 
 /* the global run queue/state */
 static struct{
-	task_t *running;
-	tasklist_t queue; /* runnable */
-	int parked;       /* count of parked tasks */
-	tasklist_t begin; /* blocking requests to newtask() */
-	task_t t0;        /* the root task (taskmain()) */
+	task_t     *running;
+	tasklist_t queue;    /* runnable */
+	int        parked;   /* count of parked tasks */
+	tasklist_t begin;    /* blocking requests to newtask() */
+	task_t     t0;       /* the root task (taskmain()) */
 } runq;
 
+/* a gross header hack for a bitmap slab allocator */
 #define MAXTASKS 1024
 #define BITSLAB_SIZE MAXTASKS
 #define BITSLAB_TYPE task_t
@@ -233,6 +218,10 @@ static noreturn __entry(void) {
 	taskexit();
 }
 
+/* 
+ * longjmp into a task, which must be runnable
+ * (sets/clobbers runq.running)
+ */
 static noreturn run(task_t *task) {
 	assert(task->status == STATUS_RUNNABLE);
 	runq.running = task;
@@ -241,7 +230,10 @@ static noreturn run(task_t *task) {
 	assert(0 && "unreachable");
 }
 
-/* task exit -- should never return */
+/*
+ * exit point for all tasks except t0
+ * longjmps into another task, or aborts
+ */
 static noreturn taskexit(void) {
 	task_t *old = runq.running;
 	assert(old->status == STATUS_RUNNING);
@@ -268,19 +260,19 @@ static noreturn taskexit(void) {
 	run(next);
 }
 
-/*
- * spawn starts a new coroutine that begins
- * executing the given function.
- */
 void spawn(void (start)(void*), void *data) {
 	task_t *t = NULL;
 	int waited = 0;
 	assert(start);
 
 	/* 
-	 * we may need to wait 
+	 * We may need to wait 
      * to allocate; there are
 	 * a fixed number of tasks.
+	 * If there other tasks in the
+	 * queue, then enqueue rather than
+	 * attempting to malloc in order
+	 * to preserve fairness.
      */
 	if (runq.begin.top) {
 	dowait:
@@ -294,15 +286,14 @@ void spawn(void (start)(void*), void *data) {
 		}
 		assert(0 && "deadlock!");
 	}
+
 	t->udata = data;
 	t->start = start;
-	setstack(&t->ctx, (uintptr_t)(&t->pad2));
-	setreturn(&t->ctx, (uintptr_t)(__entry));
+	setup(&t->ctx, (uintptr_t)(&t->pad2), (uintptr_t)__entry);
 	ready(t);
 	return;
 }
 
-/* main */
 extern int taskmain();
 
 int main(void) {

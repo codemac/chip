@@ -2,7 +2,6 @@
 #include <time.h>
 #include <assert.h>
 #include "../chip.h"
-#include "../chipsync.h"
 
 /* 
  * spawn more than MAXTASKS
@@ -16,7 +15,7 @@ static sema_t sema;
 
 static void inc(void *data) {
 	if (++count == INCS) {
-		semrelease(&sema);
+		post(&sema);
 	}
 	return;
 }
@@ -34,12 +33,12 @@ int taskmain(void) {
 	/* no tasks to run -- should return immediately */
 	sched();
 
-	/* spawn 100 tasks that run 'inc' */
+	/* spawn tasks that run 'inc' */
 	for (int i=0; i<INCS; ++i) {
 		spawn(inc, NULL);
 	}
 	clock_t t = clock();
-	semacquire(&sema);
+	park(&sema);
 	t = clock() - t;
 	assert(sema.count == 0);
 	assert(count == INCS);

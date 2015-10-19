@@ -1,12 +1,12 @@
 CC := clang
-CFLAGS := -O3 -Wall -Werror
+CFLAGS := -O3 -Wall -Werror -mpopcnt
 TSTFLAGS := -g -fno-omit-frame-pointer
 ARCH := amd64
 
-%.test: tests/%.c chip.c context_$(ARCH).s
+%.test: tests/%.c runtime.c context_$(ARCH).s
 	$(CC) $(CFLAGS) $(TSTFLAGS) $^ -o $@
 
-%.bench: tests/%.c chip.c context_$(ARCH).s
+%.bench: tests/%.c runtime.c context_$(ARCH).s
 	$(CC) $(CFLAGS) $^ -o $@
 
 .PHONY: test
