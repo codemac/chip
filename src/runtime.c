@@ -1,6 +1,7 @@
 #include <stdint.h>
 #include <stddef.h>
 #include <assert.h>
+#include <sys/mman.h>
 #include "runtime.h"
 
 #define noreturn void __attribute__((noreturn))
@@ -86,10 +87,10 @@ struct task_s {
 	task_t 	   *next;
 	regctx_t   ctx;    /* saved register state, if not running */
 	int        status; /* STATUS_XXX */
-	char       pad[16];
-	char       stack[4096];
-	char       pad2[16];
+	void       *stack;
 };
+
+static void *stack_mapped;
 
 /* the global run queue/state */
 static struct{
@@ -212,7 +213,7 @@ int wakeall(tasklist_t *tl) {
 	return out;
 }
 
-/* task start */
+/* task start - we get SIGSEGV if we return */
 static noreturn __entry(void) {
 	runq.running->start(runq.running->udata);
 	taskexit();
@@ -289,12 +290,21 @@ void spawn(void (start)(void*), void *data) {
 
 	t->udata = data;
 	t->start = start;
-	setup(&t->ctx, (uintptr_t)(&t->pad2), (uintptr_t)__entry);
+	setup(&t->ctx, (uintptr_t)t->stack, (uintptr_t)__entry);
 	ready(t);
 	return;
 }
 
 extern int taskmain();
+
+#ifndef PAGE_SIZE
+#define PAGE_SIZE 4096
+#endif
+#define STACK_PAGES 2 /* 8k stacks are reasonably generous */
+#define GUARD_PAGES 1
+#define TSTKSZ (STACK_PAGES*PAGE_SIZE)
+#define GSTKSZ ((STACK_PAGES+GUARD_PAGES)*PAGE_SIZE)
+#define STACK_ARENA_SIZE (GSTKSZ*MAXTASKS)
 
 int main(void) {
 	/* 
@@ -303,5 +313,24 @@ int main(void) {
 	 */
 	runq.t0.status = STATUS_RUNNING;
 	runq.running = &runq.t0;
-	return taskmain();
+
+	/* map all stacks in one mapping */
+	stack_mapped = mmap(NULL, STACK_ARENA_SIZE, PROT_READ|PROT_WRITE, MAP_SHARED|MAP_ANON, -1, 0);
+	assert(stack_mapped);
+
+	/* 
+	 * set up stacks in ascending order with a guard page
+	 * at the bottom. the hope is that the bitslab
+	 * allocator will do a decent job w.r.t. locality.
+	 */
+	void *stkp = stack_mapped;
+	for (int i=0; i<MAXTASKS; ++i) {
+		tslab.mem[i].stack = stkp + GSTKSZ;
+		mprotect(stkp, PAGE_SIZE, PROT_NONE); /* mark the low page as unwriteable */
+		stkp += GSTKSZ;
+	}
+
+	int ret = taskmain();
+	munmap(stack_mapped, STACK_ARENA_SIZE);
+	return ret;
 }
