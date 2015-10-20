@@ -1,5 +1,5 @@
-.globl __savectx
-__savectx:
+.globl _savectx
+_savectx:
 	xorl    %eax, %eax
 	movq	%rbx, 0(%rdi)
 	movq	%rbp, 8(%rdi) 
@@ -15,8 +15,8 @@ __savectx:
 	movq	%rsi, 72(%rdi)
 	ret     /* return 0 (see top) */
 
-.globl __loadctx
-__loadctx:
+.globl _loadctx
+_loadctx:
 	movl    $1, %eax
 	movq	0(%rdi), %rbx
 	movq	8(%rdi), %rbp
