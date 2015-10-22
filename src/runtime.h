@@ -1,5 +1,6 @@
 #ifndef __CHIP_RUNTIME_H_
 #define __CHIP_RUNTIME_H_
+#include <stddef.h>
 
 /* 
 	Some notes on task scheduling:
@@ -20,6 +21,13 @@ void sched(void);
 
 /* chip defines main() */
 int main(void);
+
+/*
+ * stack_remaining returns the number of bytes
+ * remaining on the current task stack, or -1
+ * if it is called while on the same stack as main().
+ */
+ptrdiff_t stack_remaining(void);
 
 /*
  * The following primitives can be used

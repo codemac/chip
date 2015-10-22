@@ -2,6 +2,7 @@
 #include <stddef.h>
 #include <assert.h>
 #include <sys/mman.h>
+#include <limits.h>
 #include "runtime.h"
 
 #define noreturn void __attribute__((noreturn))
@@ -114,7 +115,7 @@ static taskslab_t tslab;
 #undef BITSLAB_TYPE_NAME
 #undef BITSLAB_FN_PREFIX
 
-static noreturn taskexit(void);
+static noreturn _sbrt_exit(void);
 
 task_t *list_pop(tasklist_t *tl) {
 	if (tl->top == NULL) {
@@ -144,33 +145,44 @@ static void list_pushback(tasklist_t *tl, task_t *task) {
 	return;
 }
 
+/*
+ * find_work() - the root of the scheduler.
+ *
+ * Every scheduling point ultimately calls find_work()
+ * to figure out what to run next. Polling hooks should
+ * be added here.
+ */
+static task_t *find_work(int must) {
+	task_t *work = list_pop(&runq.queue);
+	if (work == NULL && onpoll != NULL) {
+		onpoll(must);
+		work = list_pop(&runq.queue);
+	}
+	if (must) assert(work && "deadlock!");
+	return work;
+}
+
+/* to de-schedule, set runq.running->status, then call swtch(find_work(1)) */
+static void swtch(task_t *next) {
+	assert(next != runq.running);
+	assert(next->status == STATUS_RUNNABLE);
+	next->status = STATUS_RUNNING;
+	task_t *me = runq.running;
+	runq.running = next;
+	swapctx(&me->ctx, &next->ctx);
+	assert(runq.running == me);
+	return;
+}
+
 /* 
  * find a runnable task; call swap 
  * returns 0 if no task is available
  */
 static int yield(int block, tasklist_t *target) {
-	task_t *other = list_pop(&runq.queue);
-	if (other == NULL && onpoll != NULL) {
-		onpoll(block);
-		other = list_pop(&runq.queue);
-	}
-	if (other == NULL) {
-		if (block) assert(0 && "deadlock!");
-		return 0;
-	}
-
-	/* pushback currently-running task */
-	assert(other != runq.running);
-	assert(other->status == STATUS_RUNNABLE);
-
-	other->status = STATUS_RUNNING;
-	task_t *this = runq.running;
-	runq.running = other;
-	list_pushback(target, this);
-	swapctx(&this->ctx, &other->ctx);
-
-	/* we were woken */
-	assert(runq.running == this);
+	task_t *next = find_work(block);
+	if (next == NULL) return 0;
+	list_pushback(target, runq.running);
+	swtch(next);
 	return 1;
 }
 
@@ -214,9 +226,9 @@ int wakeall(tasklist_t *tl) {
 }
 
 /* task start - we get SIGSEGV if we return */
-static noreturn __entry(void) {
+static noreturn _sbrt_entry(void) {
 	runq.running->start(runq.running->udata);
-	taskexit();
+	_sbrt_exit();
 }
 
 /* 
@@ -231,11 +243,9 @@ static noreturn run(task_t *task) {
 	assert(0 && "unreachable");
 }
 
-/*
- * exit point for all tasks except t0
- * longjmps into another task, or aborts
- */
-static noreturn taskexit(void) {
+/* free running task; jump to next available work */
+static noreturn _sbrt_exit(void) {
+	/* free/clear old task state */
 	task_t *old = runq.running;
 	assert(old->status == STATUS_RUNNING);
 	old->status = STATUS_EMPTY;
@@ -246,19 +256,11 @@ static noreturn taskexit(void) {
 	/* 
 	 * if someone was waiting to
 	 * create a new task, mark them
-     * as runnable.
+	 * as runnable.
 	 */
 	wake(&runq.begin);
-	
-	task_t *next = list_pop(&runq.queue);
-	if (next == NULL && runq.parked) {
-		if (onpoll) {
-			onpoll(1);
-			next = list_pop(&runq.queue);
-		}
-	}
-	assert(next && "deadlock!");
-	run(next);
+
+	run(find_work(1));
 }
 
 void spawn(void (start)(void*), void *data) {
@@ -268,13 +270,13 @@ void spawn(void (start)(void*), void *data) {
 
 	/* 
 	 * We may need to wait 
-     * to allocate; there are
+	 * to allocate; there are
 	 * a fixed number of tasks.
 	 * If there other tasks in the
 	 * queue, then enqueue rather than
 	 * attempting to malloc in order
 	 * to preserve fairness.
-     */
+	 */
 	if (runq.begin.top) {
 	dowait:
 		wait(&runq.begin);
@@ -290,21 +292,35 @@ void spawn(void (start)(void*), void *data) {
 
 	t->udata = data;
 	t->start = start;
-	setup(&t->ctx, (uintptr_t)t->stack, (uintptr_t)__entry);
+	setup(&t->ctx, (uintptr_t)t->stack, (uintptr_t)_sbrt_entry);
 	ready(t);
 	return;
 }
 
 extern int taskmain();
 
+/* use either PAGE_SIZE or PAGESIZE before defaulting to 4096 */
 #ifndef PAGE_SIZE
+#ifdef PAGESIZE
+#define PAGE_SIZE PAGESIZE
+#else
 #define PAGE_SIZE 4096
 #endif
+#endif
+
 #define STACK_PAGES 2 /* 8k stacks are reasonably generous */
 #define GUARD_PAGES 1
 #define TSTKSZ (STACK_PAGES*PAGE_SIZE)
 #define GSTKSZ ((STACK_PAGES+GUARD_PAGES)*PAGE_SIZE)
 #define STACK_ARENA_SIZE (GSTKSZ*MAXTASKS)
+
+ptrdiff_t stack_remaining(void) {
+	if (runq.running == &runq.t0) return -1;
+	int dummy;
+	uintptr_t stack_top = (uintptr_t)runq.running->stack;
+	uintptr_t stack_bottom = (uintptr_t)(&dummy);
+	return TSTKSZ - (ptrdiff_t)(stack_top - stack_bottom);
+}
 
 int main(void) {
 	/* 
@@ -315,8 +331,8 @@ int main(void) {
 	runq.running = &runq.t0;
 
 	/* map all stacks in one mapping */
-	stack_mapped = mmap(NULL, STACK_ARENA_SIZE, PROT_READ|PROT_WRITE, MAP_SHARED|MAP_ANON, -1, 0);
-	assert(stack_mapped);
+	stack_mapped = mmap(NULL, STACK_ARENA_SIZE, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANON, -1, 0);
+	assert(stack_mapped != MAP_FAILED);
 
 	/* 
 	 * set up stacks in ascending order with a guard page

@@ -16,6 +16,7 @@ static sema_t sema;
 static void inc(void *data) {
 	if (++count == INCS) {
 		post(&sema);
+		assert(stack_remaining() > 8000);
 	}
 	return;
 }
@@ -33,6 +34,8 @@ int taskmain(void) {
 	/* no tasks to run -- should return immediately */
 	sched();
 
+	assert(stack_remaining() == -1);
+	
 	/* spawn tasks that run 'inc' */
 	clock_t t = clock();
 	for (int i=0; i<INCS; ++i) {
