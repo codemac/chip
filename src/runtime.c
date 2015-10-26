@@ -61,18 +61,18 @@ static inline void setup(regctx_t *ctx, uintptr_t stack, uintptr_t retpc) {
  * __savectx() returning a non-zero
  * value somewhere else!)
  */
-extern int _savectx(regctx_t*);
+extern void _swapctx(regctx_t*, const regctx_t*);
 extern noreturn _loadctx(const regctx_t*);
 
-static inline void swapctx(regctx_t *save, const regctx_t *jmp) {
-	/* belts and suspenders */
-	assert(save != jmp);
+/* static inline void swapctx(regctx_t *save, const regctx_t *jmp) { */
+/* 	/\* belts and suspenders *\/ */
+/* 	assert(save != jmp); */
 
-	if (_savectx(save) == 0) {
-		_loadctx(jmp);
-	}
-	return;
-}
+/* 	if (_savectx(save) == 0) { */
+/* 		_loadctx(jmp); */
+/* 	} */
+/* 	return; */
+/* } */
 
 /* possible task statuses */
 enum {
@@ -84,11 +84,12 @@ enum {
 
 struct task_s {
 	void       (*start)(void*); 
-	void       *udata;  /* passed to task->start() */
+	void       *udata; /* passed to task->start() */
 	task_t 	   *next;
 	regctx_t   ctx;    /* saved register state, if not running */
-	int        status; /* STATUS_XXX */
 	void       *stack;
+	int        status; /* STATUS_XXX */
+	char       pad[12];
 };
 
 static void *stack_mapped;
@@ -158,7 +159,9 @@ static task_t *find_work(int must) {
 		onpoll(must);
 		work = list_pop(&runq.queue);
 	}
-	if (must) assert(work && "deadlock!");
+	if (must) {
+		assert(work && "deadlock!");
+	}
 	return work;
 }
 
@@ -169,7 +172,7 @@ static void swtch(task_t *next) {
 	next->status = STATUS_RUNNING;
 	task_t *me = runq.running;
 	runq.running = next;
-	swapctx(&me->ctx, &next->ctx);
+	_swapctx(&me->ctx, &next->ctx);
 	assert(runq.running == me);
 	return;
 }

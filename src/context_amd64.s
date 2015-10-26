@@ -1,6 +1,5 @@
-.globl _savectx
-_savectx:
-	xorl    %eax, %eax
+.globl _swapctx
+_swapctx:
 	movq	%rbx, 0(%rdi)
 	movq	%rbp, 8(%rdi) 
 	movq	%r10, 16(%rdi)
@@ -10,14 +9,23 @@ _savectx:
 	movq	%r14, 48(%rdi)
 	movq	%r15, 56(%rdi)
 	movq	(%rsp), %rcx	
-	leaq	8(%rsp), %rsi	
+	leaq	8(%rsp), %rax	
 	movq	%rcx, 64(%rdi)
-	movq	%rsi, 72(%rdi)
-	ret     /* return 0 (see top) */
+	movq	%rax, 72(%rdi)
+	movq	0(%rsi), %rbx
+	movq	8(%rsi), %rbp
+	movq	16(%rsi), %r10
+	movq	24(%rsi), %r11
+	movq	32(%rsi), %r12
+	movq	40(%rsi), %r13
+	movq	48(%rsi), %r14
+	movq	56(%rsi), %r15
+	movq	72(%rsi), %rsp
+	pushq	64(%rsi)	
+	ret
 
 .globl _loadctx
 _loadctx:
-	movl    $1, %eax
 	movq	0(%rdi), %rbx
 	movq	8(%rdi), %rbp
 	movq	16(%rdi), %r10
@@ -28,4 +36,4 @@ _loadctx:
 	movq	56(%rdi), %r15
 	movq	72(%rdi), %rsp
 	pushq	64(%rdi)	
-	ret     /* return _savectx */
+	ret
