@@ -1,6 +1,6 @@
 CC := clang
-CFLAGS := -O3 -Wall -Werror -mpopcnt
-TSTFLAGS := -g -fno-omit-frame-pointer
+CFLAGS := -O3 -g -Wall -Werror -static -mpopcnt
+TSTFLAGS := -fno-omit-frame-pointer
 ARCH := amd64
 
 %.test: tests/%.c runtime.c context_$(ARCH).s

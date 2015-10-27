@@ -64,16 +64,6 @@ static inline void setup(regctx_t *ctx, uintptr_t stack, uintptr_t retpc) {
 extern void _swapctx(regctx_t*, const regctx_t*);
 extern noreturn _loadctx(const regctx_t*);
 
-/* static inline void swapctx(regctx_t *save, const regctx_t *jmp) { */
-/* 	/\* belts and suspenders *\/ */
-/* 	assert(save != jmp); */
-
-/* 	if (_savectx(save) == 0) { */
-/* 		_loadctx(jmp); */
-/* 	} */
-/* 	return; */
-/* } */
-
 /* possible task statuses */
 enum {
 	STATUS_EMPTY,    /* uninitialized */
@@ -83,10 +73,10 @@ enum {
 };
 
 struct task_s {
-	void       (*start)(void*); 
-	void       *udata; /* passed to task->start() */
 	task_t 	   *next;
 	regctx_t   ctx;    /* saved register state, if not running */
+	void       (*start)(void*); 
+	void       *udata; /* passed to task->start() */
 	void       *stack;
 	int        status; /* STATUS_XXX */
 	char       pad[12];
@@ -254,23 +244,31 @@ static noreturn _sbrt_exit(void) {
 	old->status = STATUS_EMPTY;
 	old->start = NULL;
 	old->udata = NULL;
-	slab_free(&tslab, old);
 
+	task_t *target;
 	/* 
-	 * if someone was waiting to
-	 * create a new task, mark them
-	 * as runnable.
+	 * micro-optimization: if someone is blocked in
+	 * spawn(), jump directly into that stack with 'next' set,
+	 * which avoids the call to slab_free here and the call
+	 * to slab_malloc on the other side. (see the corresponding
+	 * code in spawn())
 	 */
-	wake(&runq.begin);
-
-	run(find_work(1));
+	if (runq.begin.top) {
+		target = list_pop(&runq.begin);
+		--runq.parked;
+		target->status = STATUS_RUNNABLE;
+		target->next = old;
+	} else {
+		slab_free(&tslab, old);
+		target = find_work(1);
+	}
+	assert(target);
+       	run(target);
 }
 
 void spawn(void (start)(void*), void *data) {
-	task_t *t = NULL;
-	int waited = 0;
-	assert(start);
-
+	task_t *t;
+	
 	/* 
 	 * We may need to wait 
 	 * to allocate; there are
@@ -280,19 +278,14 @@ void spawn(void (start)(void*), void *data) {
 	 * attempting to malloc in order
 	 * to preserve fairness.
 	 */
-	if (runq.begin.top) {
-	dowait:
+	if (runq.begin.top || (NULL == (t = slab_malloc(&tslab)))) {
+		/* we should only be woken when ->next is set */
 		wait(&runq.begin);
+		assert(runq.running->next);
+		t = runq.running->next;
+		runq.running->next = NULL;
 	}
-	t = slab_malloc(&tslab);
-	if (t == NULL) {
-		if (waited == 0) {
-			waited = 1;
-			goto dowait;
-		}
-		assert(0 && "deadlock!");
-	}
-
+	
 	t->udata = data;
 	t->start = start;
 	setup(&t->ctx, (uintptr_t)t->stack, (uintptr_t)_sbrt_entry);

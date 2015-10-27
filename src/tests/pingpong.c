@@ -8,7 +8,7 @@ void pong(void* nothing) {
 	}
 }
 
-#define PONGS 1000000
+#define PONGS 10000000
 
 int taskmain(void) {
 	puts("starting ping-pong test");
