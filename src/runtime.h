@@ -22,6 +22,14 @@ void sched(void);
 /* chip defines main() */
 int main(void);
 
+typedef struct {
+	int runnable; /* number of currently-runnable tasks */
+	int parked;   /* number of parked tasks */
+	int free;     /* number of free (unused) tasks */
+} tsk_stats_t;
+
+void get_tsk_stats(tsk_stats_t *);
+
 /*
  * stack_remaining returns the number of bytes
  * remaining on the current task stack, or -1

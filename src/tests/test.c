@@ -31,6 +31,13 @@ int taskmain(void) {
 	 */
 	puts("running tests...");
 
+	tsk_stats_t stats;
+
+	get_tsk_stats(&stats);
+
+	assert(stats.parked == 0);
+	assert(stats.runnable == 0);
+	
 	/* no tasks to run -- should return immediately */
 	sched();
 
@@ -41,7 +48,16 @@ int taskmain(void) {
 	for (int i=0; i<INCS; ++i) {
 		spawn(inc, NULL);
 	}
+	get_tsk_stats(&stats);
+	printf("after %d spawns, %d free, %d runnable\n", INCS, stats.free, stats.runnable);
+	
 	park(&sema);
+
+	/* we waited for everything to end -- make sure this is the case. */
+	get_tsk_stats(&stats);
+	assert(stats.runnable == 0);
+	assert(stats.parked == 0);
+	
 	t = clock() - t;
 	assert(sema.count == 0);
 	assert(count == INCS);

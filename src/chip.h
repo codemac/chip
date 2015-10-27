@@ -12,7 +12,7 @@ typedef struct {
 } sema_t;
 
 /* 
- * semacquire attempts to decrement
+ * park attempts to decrement
  * the semaphore counter but blocks
  * if decrementing the counter would
  * go below zero.
@@ -26,7 +26,7 @@ void park(sema_t *sema) {
 }
 
 /*
- * semrelease increments the semaphore
+ * post increments the semaphore
  * counter, or wakes someone waiting to
  * decrement the semaphore.
  */

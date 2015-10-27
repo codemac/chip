@@ -19,9 +19,13 @@ int taskmain(void) {
 		sched();
 	}
 	clock_t end = clock();
-	unsigned long cycles = end-start;
+ 	unsigned long cycles = end-start;
 	double cpp = ((double)cycles)/((double)PONGS);
 	printf("%d ping-pongs in %ld clocks\n", PONGS, cycles);
 	printf("%f clocks per ping-pong\n", cpp);
+
+	tsk_stats_t stats;
+	get_tsk_stats(&stats);
+	assert(stats.parked == 0);
 	return 0;
 }

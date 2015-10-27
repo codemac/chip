@@ -42,7 +42,7 @@ int taskmain(void) {
 	assert(sema.count == 0);
 	assert(count == INCS);
 	double cpp = ((double)t)/((double)INCS);
-	printf("%d stack swaps in %ld clocks\n", INCS, t);
-	printf("%f clocks per ping-pong\n", cpp);
+	printf("%d stack switches in %ld clocks\n", INCS, t);
+	printf("%f clocks per stack switch\n", cpp);
 	return 0;
 }

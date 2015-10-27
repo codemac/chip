@@ -108,6 +108,36 @@ static taskslab_t tslab;
 
 static noreturn _sbrt_exit(void);
 
+void get_tsk_stats(tsk_stats_t *stats) {
+	stats->free = 0;
+	stats->parked = 0;
+	stats->runnable = 0;
+	int running = 0;
+	for (int i=0; i<MAXTASKS; ++i) {
+		switch (tslab.mem[i].status) {
+		case STATUS_EMPTY:
+			stats->free++;
+			break;
+		case STATUS_PARKED:
+			stats->parked++;
+			break;
+		case STATUS_RUNNABLE:
+			stats->runnable++;
+			break;
+		case STATUS_RUNNING:
+			assert(running == 0);
+			running = 1;
+			break;
+		default:
+			assert(0 && "unknown task status!");
+		}
+	}
+	if (running == 0) {
+		assert(runq.running == &runq.t0);
+	}
+	assert(stats->parked == runq.parked);
+}
+
 task_t *list_pop(tasklist_t *tl) {
 	if (tl->top == NULL) {
 		return NULL;
@@ -262,12 +292,17 @@ static noreturn _sbrt_exit(void) {
 		slab_free(&tslab, old);
 		target = find_work(1);
 	}
-	assert(target);
        	run(target);
 }
 
 void spawn(void (start)(void*), void *data) {
 	task_t *t;
+
+	/* 
+	 * TODO:
+	 * if every alloc'd task is parked on i/o,
+	 * then mmap a new task (or arena of tasks).
+	 */
 	
 	/* 
 	 * We may need to wait 
