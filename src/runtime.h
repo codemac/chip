@@ -1,6 +1,7 @@
 #ifndef __CHIP_RUNTIME_H_
 #define __CHIP_RUNTIME_H_
 #include <stddef.h>
+#include <sys/types.h>
 
 /* 
 	Some notes on task scheduling:
@@ -82,13 +83,18 @@ int wake(tasklist_t *list);
  */
 int wakeall(tasklist_t *list);
 
-/*
- * if onpoll is non-NULL,
- * it is called whenever the
- * scheduler is looking for work.
- * 
- * (this is used by netpollers)
- */
-void (*onpoll)(int block);
+typedef struct {
+	int fd;
+	task_t *writer;
+	task_t *reader;
+} ioctx_t;
+
+int ioctx_init(int fd, ioctx_t *ctx);
+
+int ioctx_destroy(ioctx_t *ctx);
+
+ssize_t ioctx_write(ioctx_t *ctx, char *buf, size_t bytes);
+
+ssize_t ioctx_read(ioctx_t *ctx, char *buf, size_t bytes);
 
 #endif /* __CHIP_RUNTIME_H_ */

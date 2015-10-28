@@ -3,7 +3,14 @@
 #include <assert.h>
 #include <sys/mman.h>
 #include <limits.h>
-#include "runtime.h"
+
+#ifdef __gnu_linux__
+#include "runtime_epoll.h"
+#elif __APPLE__
+#include "runtime_kqueue.h"
+#else
+#error "unsupported OS"
+#endif
 
 #define noreturn void __attribute__((noreturn))
 
@@ -175,8 +182,8 @@ static void list_pushback(tasklist_t *tl, task_t *task) {
  */
 static task_t *find_work(int must) {
 	task_t *work = list_pop(&runq.queue);
-	if (work == NULL && onpoll != NULL) {
-		onpoll(must);
+	if (work == NULL && must) {
+		poll(-1); /* TODO: timer */
 		work = list_pop(&runq.queue);
 	}
 	if (must) {
@@ -328,6 +335,34 @@ void spawn(void (start)(void*), void *data) {
 	return;
 }
 
+ssize_t ioctx_write(ioctx_t *ctx, char *buf, size_t bytes) {
+	ssize_t amt;
+try:
+	amt = write(ctx->fd, buf, bytes);
+	if ((amt == -1) && (errno == EAGAIN)) {
+		ctx->writer = runq.running;
+		runq.running->status = STATUS_PARKED;
+		swtch(find_work(1));
+		ctx->writer = NULL;
+		goto try;
+	}
+	return amt;
+}
+
+ssize_t ioctx_read(ioctx_t *ctx, char *buf, size_t max) {
+	ssize_t amt;
+try:
+	amt = read(ctx->fd, buf, max);
+	if ((amt == -1) && (errno == EAGAIN)) {
+		ctx->reader = runq.running;
+		runq.running->status = STATUS_PARKED;
+		swtch(find_work(1));
+		ctx->reader = NULL;
+		goto try;
+	}
+	return amt;
+}
+
 extern int taskmain();
 
 /* use either PAGE_SIZE or PAGESIZE before defaulting to 4096 */
@@ -377,6 +412,8 @@ int main(void) {
 		stkp += GSTKSZ;
 	}
 
+	pollinit();
+	
 	int ret = taskmain();
 	munmap(stack_mapped, STACK_ARENA_SIZE);
 	return ret;
