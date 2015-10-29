@@ -1,0 +1,29 @@
+#! /usr/local/bin/rc -e
+
+tests = `{ls tests/*_test.c | sed -e s/_test.c// -e s/tests\///}
+benchs = `{ls tests/*_bench.c | sed -e s/_bench.c// -e s/tests\///}
+
+target = `{gcc -v |[2] grep Target}
+
+CFLAGS = '-O3 -g -Wall -Werror -static'
+
+if (echo $target | grep -q x86_64) ARCH = amd64
+if (echo $target | grep -q armv7) ARCH = arm
+
+fn build_tests {
+       for (test in $tests) {
+		     make bin/$test.test
+       }
+}
+
+fn build_benchs {
+       for (bench in $benchs) {
+		      make bin/$bench.bench
+       }
+}
+
+fn test { build_tests; for (test in `{ls ./bin/*.test}) ./$test }
+
+fn bench { build_benchs; for (bench in `{ls ./bin/*.bench}) ./$bench }
+
+$1

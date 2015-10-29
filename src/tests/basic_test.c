@@ -29,7 +29,7 @@ int taskmain(void) {
 	 * because it is dynamically linked,
 	 * and segfaults when run in a task.
 	 */
-	puts("running tests...");
+	puts("running basic tests...");
 
 	tsk_stats_t stats;
 

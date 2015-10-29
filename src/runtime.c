@@ -14,6 +14,8 @@
 
 #define noreturn void __attribute__((noreturn))
 
+#define clobber_mem() __asm__("" : : : "memory")
+
 typedef struct {
 /* 
  * we need all callee-saved registers
@@ -200,6 +202,7 @@ static void swtch(task_t *next) {
 	task_t *me = runq.running;
 	runq.running = next;
 	_swapctx(&me->ctx, &next->ctx);
+	clobber_mem();
 	return;
 }
 

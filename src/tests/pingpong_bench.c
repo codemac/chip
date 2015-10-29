@@ -11,7 +11,7 @@ void pong(void* nothing) {
 #define PONGS 10000000
 
 int taskmain(void) {
-	puts("starting ping-pong test");
+	puts("starting ping-pong test...");
 
 	spawn(pong, NULL);
 	clock_t start = clock();

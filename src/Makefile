@@ -1,22 +1,11 @@
-CC := clang
-CFLAGS := -O3 -g -Wall -Werror -static -mpopcnt
-TSTFLAGS := -fno-omit-frame-pointer
-ARCH := amd64
+CC := gcc
 
-%.test: tests/%.c runtime.c context_$(ARCH).s
-	$(CC) $(CFLAGS) $(TSTFLAGS) $^ -o $@
-
-%.bench: tests/%.c runtime.c context_$(ARCH).s
+bin/%.test: tests/%_test.c runtime.c context_$(ARCH).s
 	$(CC) $(CFLAGS) $^ -o $@
 
-.PHONY: test
-test: test.test
-	./test.test
-
-.PHONY: bench
-bench: pingpong.bench
-	./pingpong.bench
+bin/%.bench: tests/%_bench.c runtime.c context_$(ARCH).s
+	$(CC) $(CFLAGS) $^ -o $@
 
 .PHONY: clean
 clean:
-	$(RM) -r *.o *.gch *.test *.bench *.out *.dSYM
+	$(RM) -r *.o *.gch *.test *.bench *.out *.dSYM bin/*

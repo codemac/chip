@@ -25,7 +25,7 @@ static void inc(void *data) {
 }
 
 int taskmain(void) {
-	puts("pre-faulting stacks...");
+	puts("running sequential stack switch test...");
 
 	for (int i=0; i<1024; ++i) {
 		spawn(stkchk, NULL);

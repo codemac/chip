@@ -1,6 +1,5 @@
 #define _GNU_SOURCE
 #include <stdio.h>
-#include <time.h>
 #include <assert.h>
 #include "../chip.h"
 #include <unistd.h>
@@ -9,7 +8,7 @@
 
 static sema_t rdsema;
 
-static char write_buf[2048];
+static char write_buf[4096];
 
 static char read_buf[4096];
 
@@ -20,7 +19,7 @@ void pipe_writer(void *data) {
 	ioctx_t ctx;
 	assert(ioctx_init(wfd, &ctx) == 0);
 
-	int rand = open("/dev/urandom", O_RDONLY);
+	int rand = open("/dev/zero", O_RDONLY);
 	if (rand == -1) {
 		perror("open(\"/dev/urandom\")");
 		_exit(1);
@@ -28,9 +27,9 @@ void pipe_writer(void *data) {
 
 	ssize_t amt = 0;
 	while (amt < NUM_BYTES) {
-		ssize_t this = read(rand, write_buf, 2048);
+		ssize_t this = read(rand, write_buf, 4096);
 		if (this == -1) {
-			perror("read(\"/dev/urandom\")");
+			perror("read(\"/dev/zero\")");
 			_exit(1);
 		}
 		ssize_t w = ioctx_write(&ctx, write_buf, this);
@@ -78,7 +77,7 @@ int taskmain(void) {
 	 * because it is dynamically linked,
 	 * and segfaults when run in a task.
 	 */
-	puts("running tests...");
+	puts("running pipe tests...");
 
 	int pipefd[2];
 	int ok;
