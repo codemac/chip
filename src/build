@@ -1,5 +1,8 @@
 #! /usr/local/bin/rc -e
 
+# test/bench files are in the tests folder, and suffixed
+# with _bench.c or _test.c; keep this in sync with the
+# Makefile.
 tests = `{ls tests/*_test.c | sed -e s/_test.c// -e s/tests\///}
 benchs = `{ls tests/*_bench.c | sed -e s/_bench.c// -e s/tests\///}
 
@@ -7,8 +10,15 @@ target = `{gcc -v |[2] grep Target}
 
 CFLAGS = '-O3 -g -Wall -Werror -static'
 
+# detect host arch
 if (echo $target | grep -q x86_64) ARCH = amd64
 if (echo $target | grep -q armv7) ARCH = arm
+
+# detect host OS
+if (echo $target | grep -q linux) POLLER = epoll
+if (echo $target | grep -q bsd) POLLER = kqueue
+
+mkdir -p bin
 
 fn build_tests {
        for (test in $tests) {
@@ -25,5 +35,9 @@ fn build_benchs {
 fn test { build_tests; for (test in `{ls ./bin/*.test}) ./$test }
 
 fn bench { build_benchs; for (bench in `{ls ./bin/*.bench}) ./$bench }
+
+fn install { make install }
+
+fn uninstall { make uninstall }
 
 $1

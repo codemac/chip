@@ -1,7 +1,7 @@
 #include <stdio.h>
 #include <time.h>
 #include <assert.h>
-#include "../chip.h"
+#include "chip/chip.h"
 
 /* 
  * spawn more than MAXTASKS
