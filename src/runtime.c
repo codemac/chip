@@ -200,7 +200,6 @@ static void swtch(task_t *next) {
 	task_t *me = runq.running;
 	runq.running = next;
 	_swapctx(&me->ctx, &next->ctx);
-	assert(runq.running == me);
 	return;
 }
 
