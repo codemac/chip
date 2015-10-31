@@ -301,7 +301,7 @@ static noreturn _sbrt_exit(void) {
 		slab_free(&tslab, old);
 		target = find_work(1);
 	}
-       	run(target);
+	run(target);
 }
 
 void spawn(void (start)(void*), void *data) {
@@ -332,7 +332,18 @@ void spawn(void (start)(void*), void *data) {
 	
 	t->udata = data;
 	t->start = start;
-	setup(&t->ctx, (uintptr_t)t->stack, (uintptr_t)_sbrt_entry);
+
+	uintptr_t stack = (uintptr_t)t->stack;
+#ifdef __x86_64__
+	/*
+	 * The processor will add 8 bytes to
+	 * the stack when it 'returns' into
+	 * the new function, so we need to subtract
+	 * those 8 bytes to keep the stack aligned.
+	 */
+	stack -= sizeof(uintptr_t);
+#endif
+	setup(&t->ctx, stack, (uintptr_t)_sbrt_entry);
 	ready(t);
 	return;
 }
