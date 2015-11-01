@@ -4,7 +4,7 @@
 #include <stdio.h>
 #include <errno.h>
 
-static void ready(task_t *task);
+static void unpark(task_t *t);
 
 static int epfd;
 
@@ -40,8 +40,8 @@ void poll(int ms) {
 		struct epoll_event *ev = &events[i];
 		ioctx_t *ctx = (ioctx_t *)ev->data.ptr;
 		if (ev->events&EPOLLERR) {
-			if (ctx->writer) ready(ctx->writer);
-			if (ctx->reader) ready(ctx->reader);
+			if (ctx->writer) unpark(ctx->writer);
+			if (ctx->reader) unpark(ctx->reader);
 			return;
 		}
 		if (ctx->reader && (ev->events&(EPOLLIN|EPOLLRDHUP|EPOLLHUP))) {

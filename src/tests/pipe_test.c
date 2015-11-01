@@ -18,6 +18,7 @@ void pipe_writer(void *data) {
 	int wfd = ((int *)data)[1];
 	ioctx_t ctx;
 	assert(ioctx_init(wfd, &ctx) == 0);
+	tsk_stats_t stats;
 
 	int rand = open("/dev/zero", O_RDONLY);
 	if (rand == -1) {
@@ -32,6 +33,7 @@ void pipe_writer(void *data) {
 			perror("read(\"/dev/zero\")");
 			_exit(1);
 		}
+		get_tsk_stats(&stats);
 		ssize_t w = ioctx_write(&ctx, write_buf, this);
 		if (w == -1) {
 			perror("write(pipe)");
@@ -49,9 +51,12 @@ void pipe_reader(void *data) {
 	int rfd = ((int *)data)[0];
 	ioctx_t ctx;
 	assert(ioctx_init(rfd, &ctx) == 0);
-
+	tsk_stats_t stats;
 	ssize_t amt = 0;
 	for (;;) {
+		/* have the runtime perform a sanity check */
+		get_tsk_stats(&stats);
+
 		ssize_t this = ioctx_read(&ctx, read_buf, 4096);
 		if (this == -1) {
 			perror("read(pipe)");

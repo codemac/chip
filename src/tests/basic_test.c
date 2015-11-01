@@ -1,5 +1,4 @@
 #include <stdio.h>
-#include <time.h>
 #include <assert.h>
 #include "../chip.h"
 
@@ -44,7 +43,6 @@ int taskmain(void) {
 	assert(stack_remaining() == -1);
 	
 	/* spawn tasks that run 'inc' */
-	clock_t t = clock();
 	for (int i=0; i<INCS; ++i) {
 		spawn(inc, NULL);
 	}
@@ -58,10 +56,8 @@ int taskmain(void) {
 	assert(stats.runnable == 0);
 	assert(stats.parked == 0);
 	
-	t = clock() - t;
 	assert(sema.count == 0);
 	assert(count == INCS);
-	printf("%d spawn+joins in %ld clocks.\n", INCS, t);
 	puts("tests OK.");
 	return 0;
 }

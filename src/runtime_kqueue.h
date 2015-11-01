@@ -5,7 +5,7 @@
 #include <assert.h>
 #include <sys/event.h>
 
-static void ready(task_t *task);
+static void unpark(task_t *t);
 
 static int kqfd;
 
@@ -68,10 +68,10 @@ static void handle_events(int off, int num) {
 		ioctx_t *ctx = (ioctx_t *)ev->udata;
 		switch (ev->filter) {
 		case EVFILT_WRITE:
-			if (ctx->writer) ready(ctx->writer);
+			if (ctx->writer) unpark(ctx->writer);
 			break;
 		case EVFILT_READ:
-			if (ctx->reader) ready(ctx->reader);
+			if (ctx->reader) unpark(ctx->reader);
 			break;
 		}
 	}

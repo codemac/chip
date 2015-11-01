@@ -122,6 +122,19 @@ void get_tsk_stats(tsk_stats_t *stats) {
 	stats->parked = 0;
 	stats->runnable = 0;
 	int running = 0;
+	switch (runq.t0.status) {
+	case STATUS_PARKED:
+		stats->parked++;
+		break;
+	case STATUS_RUNNABLE:
+		stats->runnable++;
+		break;
+	case STATUS_RUNNING:
+		running = 1;
+		break;
+	default:
+		assert(0 && "bad t0 status");
+	}
 	for (int i=0; i<MAXTASKS; ++i) {
 		switch (tslab.mem[i].status) {
 		case STATUS_EMPTY:
@@ -141,9 +154,7 @@ void get_tsk_stats(tsk_stats_t *stats) {
 			assert(0 && "unknown task status!");
 		}
 	}
-	if (running == 0) {
-		assert(runq.running == &runq.t0);
-	}
+	assert(running == 1);
 	assert(stats->parked == runq.parked);
 }
 
@@ -230,7 +241,6 @@ void wait(tasklist_t *tl) {
 	runq.running->status = STATUS_PARKED;
 	++runq.parked;
 	yield(1, tl);
-	return;
 }
 
 static void ready(task_t *task) {
@@ -238,13 +248,17 @@ static void ready(task_t *task) {
 	list_pushback(&runq.queue, task);
 }
 
+static void unpark(task_t *task) {
+	assert(task->status == STATUS_PARKED);
+	--runq.parked;
+	ready(task);
+}
+
 int wake(tasklist_t *tl) {
 	assert(tl != &runq.queue);
 	task_t *task = list_pop(tl);
 	if (task) {
-		assert(task->status == STATUS_PARKED);
-		--runq.parked;
-		ready(task);
+		unpark(task);
 		return 1;
 	}
 	return 0;
@@ -272,7 +286,6 @@ static noreturn run(task_t *task) {
 	runq.running = task;
 	task->status = STATUS_RUNNING;
 	_loadctx(&task->ctx);
-	assert(0 && "unreachable");
 }
 
 /* free running task; jump to next available work */
@@ -348,15 +361,21 @@ void spawn(void (start)(void*), void *data) {
 	return;
 }
 
+static void park_and_wait(task_t **addr) {
+	*addr = runq.running;
+	runq.running->status = STATUS_PARKED;
+	++runq.parked;
+	swtch(find_work(1));
+	*addr = NULL;
+	return;
+}
+
 ssize_t ioctx_write(ioctx_t *ctx, char *buf, size_t bytes) {
 	ssize_t amt;
 try:
 	amt = write(ctx->fd, buf, bytes);
 	if ((amt == -1) && (errno == EAGAIN)) {
-		ctx->writer = runq.running;
-		runq.running->status = STATUS_PARKED;
-		swtch(find_work(1));
-		ctx->writer = NULL;
+		park_and_wait(&ctx->writer);
 		goto try;
 	}
 	return amt;
@@ -367,10 +386,7 @@ ssize_t ioctx_read(ioctx_t *ctx, char *buf, size_t max) {
 try:
 	amt = read(ctx->fd, buf, max);
 	if ((amt == -1) && (errno == EAGAIN)) {
-		ctx->reader = runq.running;
-		runq.running->status = STATUS_PARKED;
-		swtch(find_work(1));
-		ctx->reader = NULL;
+		park_and_wait(&ctx->reader);
 		goto try;
 	}
 	return amt;

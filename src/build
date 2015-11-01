@@ -1,8 +1,7 @@
 #! /usr/local/bin/rc -e
 
 # test/bench files are in the tests folder, and suffixed
-# with _bench.c or _test.c; keep this in sync with the
-# Makefile.
+# with _bench.c or _test.c; keep this in sync with the Makefile.
 tests = `{ls tests/*_test.c | sed -e s/_test.c// -e s/tests\///}
 benchs = `{ls tests/*_bench.c | sed -e s/_bench.c// -e s/tests\///}
 
