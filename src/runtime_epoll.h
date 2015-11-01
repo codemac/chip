@@ -45,10 +45,10 @@ void poll(int ms) {
 			return;
 		}
 		if (ctx->reader && (ev->events&(EPOLLIN|EPOLLRDHUP|EPOLLHUP))) {
-			ready(ctx->reader);
+			unpark(ctx->reader);
 		}
 		if (ctx->writer && (ev->events&(EPOLLOUT))) {
-			ready(ctx->writer);
+			unpark(ctx->writer);
 		}
 	}
 }
