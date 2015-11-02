@@ -1,5 +1,7 @@
 .globl __swapctx
+.globl _swapctx
 __swapctx:
+_swapctx:	
 	movq	%rbx, 0(%rdi)
 	movq	%rbp, 8(%rdi) 
 	movq	%r10, 16(%rdi)
@@ -21,7 +23,9 @@ __swapctx:
 	ret
 
 .globl __loadctx
+.globl _loadctx
 __loadctx:
+_loadctx:	
 	movq	0(%rdi), %rbx
 	movq	8(%rdi), %rbp
 	movq	16(%rdi), %r10
