@@ -16,40 +16,51 @@
 
 #define clobber_mem() __asm__("" : : : "memory")
 
+/* for type-punning register values */
+typedef union {
+	void *ptr;
+	uintptr_t val;
+} word_t;
+
 typedef struct {
 /* 
  * we need all callee-saved registers
  * N.B. keep in sync with context_{arch}.s 
  */
 #ifdef __x86_64__
-	uintptr_t rbx;
-	uintptr_t rbp;
-	uintptr_t r10;
-	uintptr_t r11;
-	uintptr_t r12;
-	uintptr_t r13;
-	uintptr_t r14;
-	uintptr_t r15;
-	uintptr_t rip;
-	uintptr_t rsp;
+	word_t rbx;
+	word_t rbp;
+	word_t r10;
+	word_t r11;
+	word_t r12;
+	word_t r13;
+	word_t r14;
+	word_t r15;
+	word_t rsp;
 #elif __arm__
-	uintptr_t r5;
-	uintptr_t r6;
-	uintptr_t r7;
-	uintptr_t r8;
-	uintptr_t r9;
-	uintptr_t r10;
-	uintptr_t r11;
-	uintptr_t r12;
-	uintptr_t r13;
-	uintptr_t r14;
+	word_t r5;
+	word_t r6;
+	word_t r7;
+	word_t r8;
+	word_t r9;
+	word_t r10;
+	word_t r11;
+	word_t r12;
+	word_t r13;
+	word_t r14;
 #endif
 } regctx_t;
 
-static inline void setup(regctx_t *ctx, uintptr_t stack, uintptr_t retpc) {
+static inline void setup(regctx_t *ctx, word_t stack, word_t retpc) {
 #ifdef __x86_64__
+	/* 
+	 * we need the first call inside the function marked by retpc
+	 * to be on a properly aligned stack, so we need 8 bytes for
+	 * the return value, and then another 8 for the push'd rbp.
+	 */
+	stack.val -= 16;
 	ctx->rsp = stack;
-	ctx->rip = retpc;
+	*(uintptr_t *)stack.ptr = retpc.val;
 #elif __arm__
 	ctx->r13 = stack;
 	ctx->r14 = retpc;
@@ -83,12 +94,11 @@ enum {
 
 struct task_s {
 	task_t 	   *next;
+	int        status; /* STATUS_XXX */
 	regctx_t   ctx;    /* saved register state, if not running */
 	void       (*start)(void*); 
 	void       *udata; /* passed to task->start() */
 	void       *stack;
-	int        status; /* STATUS_XXX */
-	char       pad[12];
 };
 
 static void *stack_mapped;
@@ -271,7 +281,7 @@ int wakeall(tasklist_t *tl) {
 	return out;
 }
 
-/* task start - we get SIGSEGV if we return */
+/* task entry point */
 static noreturn _sbrt_entry(void) {
 	runq.running->start(runq.running->udata);
 	_sbrt_exit();
@@ -319,6 +329,8 @@ static noreturn _sbrt_exit(void) {
 
 void spawn(void (start)(void*), void *data) {
 	task_t *t;
+	word_t stack;
+	word_t retpc;
 
 	/* 
 	 * TODO:
@@ -345,18 +357,9 @@ void spawn(void (start)(void*), void *data) {
 	
 	t->udata = data;
 	t->start = start;
-
-	uintptr_t stack = (uintptr_t)t->stack;
-#ifdef __x86_64__
-	/*
-	 * The processor will add 8 bytes to
-	 * the stack when it 'returns' into
-	 * the new function, so we need to subtract
-	 * those 8 bytes to keep the stack aligned.
-	 */
-	stack -= sizeof(uintptr_t);
-#endif
-	setup(&t->ctx, stack, (uintptr_t)_sbrt_entry);
+	stack.ptr = t->stack;
+	retpc.ptr = _sbrt_entry;
+	setup(&t->ctx, stack, retpc);
 	ready(t);
 	return;
 }

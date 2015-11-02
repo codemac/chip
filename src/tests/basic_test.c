@@ -14,6 +14,9 @@ static sema_t sema;
 
 static void inc(void *data) {
 	if (++count == INCS) {
+		tsk_stats_t stats;
+		get_tsk_stats(&stats);
+		assert(stats.parked == 1);
 		post(&sema);
 		assert(stack_remaining() > 8000);
 	}
@@ -47,7 +50,7 @@ int taskmain(void) {
 		spawn(inc, NULL);
 	}
 	get_tsk_stats(&stats);
-	printf("after %d spawns, %d free, %d runnable\n", INCS, stats.free, stats.runnable);
+	printf("after %d spawns, %d parked, %d free, %d runnable\n", INCS, stats.parked, stats.free, stats.runnable);
 	
 	park(&sema);
 
@@ -58,6 +61,6 @@ int taskmain(void) {
 	
 	assert(sema.count == 0);
 	assert(count == INCS);
-	puts("tests OK.");
+	puts(__FILE__ " passed.");
 	return 0;
 }

@@ -23,7 +23,7 @@ fn build_tests { for (test in $tests) make bin/$test.test }
 
 fn build_benchs { for (bench in $benchs) make bin/$bench.bench }
 
-fn test { build_tests; for (test in `{ls ./bin/*.test}) ./$test }
+fn test { build_tests; for (test in `{ls ./bin/*.test}) ./$test; echo 'PASS' }
 
 fn bench { build_benchs; for (bench in `{ls ./bin/*.bench}) ./$bench }
 

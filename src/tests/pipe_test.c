@@ -12,63 +12,55 @@ static char write_buf[4096];
 
 static char read_buf[4096];
 
+#define please(expr) if ((expr) == -1) { perror(#expr); _exit(1); }
+
 #define NUM_BYTES (1<<22)
 
 void pipe_writer(void *data) {
-	int wfd = ((int *)data)[1];
 	ioctx_t ctx;
-	assert(ioctx_init(wfd, &ctx) == 0);
 	tsk_stats_t stats;
-
-	int rand = open("/dev/zero", O_RDONLY);
-	if (rand == -1) {
-		perror("open(\"/dev/urandom\")");
-		_exit(1);
-	}
-
+	int wfd = ((int *)data)[1];
 	ssize_t amt = 0;
+	ssize_t this;
+	ssize_t w;
+	int zero;
+
+	please(ioctx_init(wfd, &ctx));
+	please(zero = open("/dev/zero", O_RDONLY));
+
 	while (amt < NUM_BYTES) {
-		ssize_t this = read(rand, write_buf, 4096);
-		if (this == -1) {
-			perror("read(\"/dev/zero\")");
-			_exit(1);
-		}
+		please(this = read(zero, write_buf, 4096));
 		get_tsk_stats(&stats);
-		ssize_t w = ioctx_write(&ctx, write_buf, this);
-		if (w == -1) {
-			perror("write(pipe)");
-			_exit(1);
-		}
+		please(w = ioctx_write(&ctx, write_buf, this))
 		amt += w;
 	}
 
-	assert(ioctx_destroy(&ctx) == 0);
+	please(ioctx_destroy(&ctx));
 	puts("write ok.");
 	return;
 }
 
 void pipe_reader(void *data) {
-	int rfd = ((int *)data)[0];
 	ioctx_t ctx;
-	assert(ioctx_init(rfd, &ctx) == 0);
 	tsk_stats_t stats;
+	size_t this;
 	ssize_t amt = 0;
+	int rfd = ((int *)data)[0];
+	
+	please(ioctx_init(rfd, &ctx));
+	
 	for (;;) {
 		/* have the runtime perform a sanity check */
 		get_tsk_stats(&stats);
-
-		ssize_t this = ioctx_read(&ctx, read_buf, 4096);
-		if (this == -1) {
-			perror("read(pipe)");
-			_exit(1);
-		}
+		please(this = ioctx_read(&ctx, read_buf, 4096));
 		if (this == 0) {
 			break;
 		}
 		amt += this;
 	}
+	
 	assert(amt == NUM_BYTES);
-	assert(ioctx_destroy(&ctx) == 0);
+	please(ioctx_destroy(&ctx));
 	puts("read ok.");
 	post(&rdsema);
 	return;
@@ -87,17 +79,9 @@ int taskmain(void) {
 	int pipefd[2];
 	int ok;
 #ifdef __gnu_linux__
-	ok = pipe2(pipefd, O_NONBLOCK|O_CLOEXEC);
-	if (ok == -1) {
-		perror("pipe2");
-		_exit(1);
-	}
+	please(ok = pipe2(pipefd, O_NONBLOCK|O_CLOEXEC));
 #else
-	ok = pipe(pipefd);	
-	if (ok == -1) {
-		perror("pipe");
-		_exit(1);
-	}
+	please(ok = pipe(pipefd));
 	fcntl(pipefd[0], F_SETFL, O_NONBLOCK|(fcntl(pipefd[0], F_GETFL)));
 	fcntl(pipefd[1], F_SETFL, O_NONBLOCK|(fcntl(pipefd[1], F_SETFL)));
 #endif
@@ -106,6 +90,6 @@ int taskmain(void) {
 	spawn(pipe_reader, pipefd);
 
 	park(&rdsema); /* wait for reads to complete */
-	puts("tests OK.");
+	puts(__FILE__ " passed.");
 	return 0;
 }

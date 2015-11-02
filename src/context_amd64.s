@@ -8,10 +8,7 @@ __swapctx:
 	movq	%r13, 40(%rdi)
 	movq	%r14, 48(%rdi)
 	movq	%r15, 56(%rdi)
-	movq	(%rsp), %rcx	
-	leaq	8(%rsp), %rax	
-	movq	%rcx, 64(%rdi)
-	movq	%rax, 72(%rdi)
+	movq	%rsp, 64(%rdi)
 	movq	0(%rsi), %rbx
 	movq	8(%rsi), %rbp
 	movq	16(%rsi), %r10
@@ -20,8 +17,7 @@ __swapctx:
 	movq	40(%rsi), %r13
 	movq	48(%rsi), %r14
 	movq	56(%rsi), %r15
-	movq	72(%rsi), %rsp
-	pushq	64(%rsi)	
+	movq	64(%rsi), %rsp
 	ret
 
 .globl __loadctx
@@ -34,6 +30,5 @@ __loadctx:
 	movq	40(%rdi), %r13
 	movq	48(%rdi), %r14
 	movq	56(%rdi), %r15
-	movq	72(%rdi), %rsp
-	pushq	64(%rdi)	
+	movq	64(%rdi), %rsp
 	ret
