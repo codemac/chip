@@ -43,7 +43,7 @@ void pipe_writer(void *data) {
 void pipe_reader(void *data) {
 	ioctx_t ctx;
 	tsk_stats_t stats;
-	size_t this;
+	ssize_t this;
 	ssize_t amt = 0;
 	int rfd = ((int *)data)[0];
 	
