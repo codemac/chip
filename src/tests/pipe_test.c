@@ -31,7 +31,7 @@ void pipe_writer(void *data) {
 	while (amt < NUM_BYTES) {
 		please(this = read(zero, write_buf, 4096));
 		get_tsk_stats(&stats);
-		please(w = ioctx_write(&ctx, write_buf, this))
+		please(w = ioctx_write(&ctx, write_buf, this));
 		amt += w;
 	}
 
@@ -83,7 +83,7 @@ int taskmain(void) {
 #else
 	please(ok = pipe(pipefd));
 	fcntl(pipefd[0], F_SETFL, O_NONBLOCK|(fcntl(pipefd[0], F_GETFL)));
-	fcntl(pipefd[1], F_SETFL, O_NONBLOCK|(fcntl(pipefd[1], F_SETFL)));
+	fcntl(pipefd[1], F_SETFL, O_NONBLOCK|(fcntl(pipefd[1], F_GETFL)));
 #endif
 
 	spawn(pipe_writer, pipefd);
