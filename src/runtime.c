@@ -23,48 +23,26 @@ typedef union {
 } word_t;
 
 typedef struct {
-/* 
- * we need all callee-saved registers
- * N.B. keep in sync with context_{arch}.s 
- */
-#ifdef __x86_64__
-	word_t rbx;
-	word_t rbp;
-	word_t r10;
-	word_t r11;
-	word_t r12;
-	word_t r13;
-	word_t r14;
-	word_t r15;
-	word_t rsp;
-#elif __arm__
-	word_t r5;
-	word_t r6;
-	word_t r7;
-	word_t r8;
-	word_t r9;
-	word_t r10;
-	word_t r11;
-	word_t r12;
-	word_t r13;
-	word_t r14;
-#endif
+	word_t sp; /* current stack pointer */
 } regctx_t;
 
 static inline void setup(regctx_t *ctx, word_t stack, word_t retpc) {
 #ifdef __x86_64__
-	/* 
-	 * we need the first call inside the function marked by retpc
-	 * to be on a properly aligned stack, so we need 8 bytes for
-	 * the return value, and then another 8 for the push'd rbp.
-	 */
+	/* push retpc (w/ 16-byte stack alignment) */
 	stack.val -= 16;
-	ctx->rsp = stack;
 	*(uintptr_t *)stack.ptr = retpc.val;
+	/* push callee-saves */
+	stack.val -= 8*sizeof(word_t);
+
 #elif __arm__
-	ctx->r13 = stack;
-	ctx->r14 = retpc;
+	/* lr is saved at the highest address */
+	stack.val -= 4;
+	*(uintptr_t *)stack.ptr = retpc.val;
+	/* space for r5-r12 */
+	stack.val -= 8*sizeof(word_t);
 #endif
+
+	ctx->sp = stack;
 	return;
 }
 

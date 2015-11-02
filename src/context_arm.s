@@ -2,13 +2,14 @@
 .global __swapctx	
 _swapctx:
 __swapctx:	
-	stm r0, {r5-r14}
-	ldm r1, {r5-r14}
-	mov pc, lr
+	push {r5-r12,r14}
+	str  r13, [r0]
+	ldr  r13, [r1]
+	pop  {r5-r12,r15} // implicit ret
 
 .global _loadctx
 .global __loadctx
 _loadctx:
 __loadctx:	
-	ldm  r0, {r5-r14}
-	mov  pc, lr 
+	ldr  r13, [r0]
+	pop  {r5-r12,r15} // implicit ret
