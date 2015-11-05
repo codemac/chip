@@ -54,9 +54,9 @@ typedef struct {
 static inline void setup(regctx_t *ctx, word_t stack, word_t retpc) {
 #ifdef __x86_64__
 	/* 
-	 * we need the first call inside the function marked by retpc
-	 * to be on a properly aligned stack, so we need 8 bytes for
-	 * the return value, and then another 8 for the push'd rbp.
+	 * _sbrt_entry() presumes entry on an un-even stack, so we need
+	 * the stack to be 8- (but not 16-)byte aligned when we return
+	 * from the context we're creating.
 	 */
 	stack.val -= 16;
 	ctx->rsp = stack;
