@@ -1,6 +1,5 @@
 # NOTE: `make` is run from the build script, which detects host arch and OS
 
-CC := gcc
 RUNTIME_HEADERS := runtime.h runtime_$(POLLER).h
 RUNTIME_SOURCE := runtime.c context_$(ARCH).s
 
@@ -11,10 +10,10 @@ $(RUNTIME_SOURCE): $(RUNTIME_HEADERS)
 bin/%.test: tests/%_test.c $(RUNTIME_SOURCE)
 	$(CC) $(CFLAGS) $^ -o $@
 
-LIB_DIR := /usr/local/lib
-INCLUDE_DIR := /usr/local/include/chip
-
 ARCHIVE := $(LIB_DIR)/libchip.a
+
+# headers in /usr/lib/chip/*.h
+CHIP_INCLUDE_DIR := $(INCLUDE_DIR)/chip
 
 # make the archive depend upon the source
 # directly so that we don't need to keep the
@@ -25,14 +24,14 @@ $(ARCHIVE): $(RUNTIME_HEADERS) $(RUNTIME_SOURCE)
 	ar rcs libchip.a runtime.o context_$(ARCH).o
 	mv libchip.a $@
 
-$(INCLUDE_DIR)/%.h: %.h
-	mkdir -p $(INCLUDE_DIR)
+$(CHIP_INCLUDE_DIR)/%.h: %.h
+	mkdir -p $(CHIP_INCLUDE_DIR)
 	cp $^ $@
 
 INSTALLED_FILES := $(ARCHIVE) \
-	$(INCLUDE_DIR)/runtime.h \
-	$(INCLUDE_DIR)/chip.h \
-	$(INCLUDE_DIR)/runtime_$(POLLER).h
+	$(CHIP_INCLUDE_DIR)/runtime.h \
+	$(CHIP_INCLUDE_DIR)/chip.h \
+	$(CHIP_INCLUDE_DIR)/runtime_$(POLLER).h
 
 .PHONY: install
 install: $(INSTALLED_FILES) 

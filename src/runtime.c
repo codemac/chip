@@ -1,7 +1,7 @@
 #include <stdint.h>
 #include <stddef.h>
-#include <assert.h>
 #include <sys/mman.h>
+#include <signal.h>
 #include <limits.h>
 
 #ifdef __gnu_linux__
@@ -16,6 +16,20 @@
 
 #define clobber_mem() __asm__("" : : : "memory")
 
+#define unlikely(expr) __builtin_expect(!!(expr), 0)
+
+/* try not to consume any stack space with runtime assertions */
+#define runtime_assert_or(expr, str) if (unlikely(!(expr)))	\
+	{ __panicstr(str, sizeof(str)-1); }
+
+#define panic(str) __panicstr(str, sizeof(str)-1)
+
+static noreturn __attribute__((cold)) __panicstr(const char *msg, size_t len) {
+	write(2, msg, len);
+	raise(SIGABRT);
+	_exit(1); /* we probably won't get here. */
+}
+
 /* for type-punning register values */
 typedef union {
 	void *ptr;
@@ -23,10 +37,7 @@ typedef union {
 } word_t;
 
 typedef struct {
-/* 
- * we need all callee-saved registers
- * N.B. keep in sync with context_{arch}.s 
- */
+/* N.B. keep in sync with context_{arch}.s  */
 #ifdef __x86_64__
 	word_t rbx;
 	word_t rbp;
@@ -54,9 +65,9 @@ typedef struct {
 static inline void setup(regctx_t *ctx, word_t stack, word_t retpc) {
 #ifdef __x86_64__
 	/* 
-	 * _sbrt_entry() presumes entry on an un-even stack, so we need
-	 * the stack to be 8- (but not 16-)byte aligned when we return
-	 * from the context we're creating.
+	   _sbrt_entry() presumes entry on an un-even stack, so we need
+	   the stack to be 8- (but not 16-)byte aligned when we return
+	   from the context we're creating.
 	 */
 	stack.val -= 16;
 	ctx->rsp = stack;
@@ -68,21 +79,8 @@ static inline void setup(regctx_t *ctx, word_t stack, word_t retpc) {
 	return;
 }
 
-/* 
- * these need to be defined externally in
- * assembly so that caller-save regs
- * are actually saved.
- *
- * __savectx() returns 0 on entry,
- * and non-zero on 'return' 
- *
- * __loadctx() should never appear
- * to return (it corresponds to
- * __savectx() returning a non-zero
- * value somewhere else!)
- */
-extern void _swapctx(regctx_t*, const regctx_t*);
-extern noreturn _loadctx(const regctx_t*);
+extern void _swapctx(regctx_t *save, const regctx_t *load);
+extern noreturn _loadctx(const regctx_t *load);
 
 /* possible task statuses */
 enum {
@@ -92,16 +90,18 @@ enum {
 	STATUS_PARKED,   /* was running; waiting for event */
 };
 
+typedef struct arena_s arena_t;
+
 struct task_s {
 	task_t 	   *next;
 	int        status; /* STATUS_XXX */
+	int        index;  /* index in arena */
 	regctx_t   ctx;    /* saved register state, if not running */
 	void       (*start)(void*); 
 	void       *udata; /* passed to task->start() */
 	void       *stack;
+	arena_t    *arena;
 };
-
-static void *stack_mapped;
 
 /* the global run queue/state */
 static struct{
@@ -112,27 +112,220 @@ static struct{
 	task_t     t0;       /* the root task (taskmain()) */
 } runq;
 
-/* a gross header hack for a bitmap slab allocator */
-#define MAXTASKS 1024
-#define BITSLAB_SIZE MAXTASKS
-#define BITSLAB_TYPE task_t
-#define BITSLAB_TYPE_NAME taskslab_t
-#define BITSLAB_FN_PREFIX slab
-#include "bitslab.h"
-static taskslab_t tslab;
-#undef BITSLAB_SIZE
-#undef BITSLAB_TYPE
-#undef BITSLAB_TYPE_NAME
-#undef BITSLAB_FN_PREFIX
+#define STACK_SIZE 8192
+#define GUARD_SIZE 4096
+#define FULL_STACK_SIZE (STACK_SIZE+GUARD_SIZE)
+#define ARENA_TASKS (sizeof(uintptr_t)*8)
+#define ARENA_STACK_MAPPING (ARENA_TASKS*FULL_STACK_SIZE)
+/* all the stacks, plus the arena structure itself */
+#define ARENA_MAPPING (ARENA_STACK_MAPPING+sizeof(arena_t))
+
+struct arena_s {
+	arena_t   *next;
+	arena_t   *prev;
+	uintptr_t bits;
+	task_t    tasks[ARENA_TASKS];
+};
+
+/*
+  mmap() a new arena.
+
+  The arena struct itself occupies the memory beyond
+  all of the stacks.
+  +------------------------------- ... ----------+
+  |guard|   stack   |guard|            | arena   |
+  +------------------------------- ... ----------+
+ */
+static arena_t *map_arena(void) {
+	void *mem = mmap(NULL, ARENA_MAPPING, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANON, -1, 0);
+	if (mem == MAP_FAILED) {
+		return NULL;
+	}
+	
+	arena_t *out = (arena_t *)(mem + ARENA_STACK_MAPPING);
+
+	for (int i=0; i<ARENA_TASKS; ++i) {
+		void *bottom = mem + (i * FULL_STACK_SIZE);
+		void *top = bottom + FULL_STACK_SIZE;
+		mprotect(bottom, GUARD_SIZE, PROT_NONE);
+		out->tasks[i].stack = top;
+		out->tasks[i].arena = out;
+		out->tasks[i].index = i;
+	}
+	return out;
+}
+
+static void unmap_arena(arena_t *arena) {
+	void *top = arena;
+	void *base = top - ARENA_STACK_MAPPING;
+	munmap(base, ARENA_MAPPING);
+}
+
+static task_t *arena_get_task(arena_t *arena) {
+	uintptr_t v = ~(arena->bits);
+	runtime_assert_or(v, "alloc from full arena");
+	int index = __builtin_ffsl(v)-1;
+	task_t *out = &arena->tasks[index];
+	runtime_assert_or(out->status == STATUS_EMPTY,
+			  "fresh task isn't empty");
+	runtime_assert_or(out->index == index, "inconsistent task index");
+	/* set index bit  */
+	arena->bits |= ((uintptr_t)1<<index);
+	return out;
+}
+
+static void arena_put_task(task_t *task) {
+	arena_t *arena = task->arena;
+	uintptr_t old = arena->bits;
+	arena->bits &= ~((uintptr_t)1<<(task->index));
+	runtime_assert_or(arena->bits != old, "double-free");
+}
+
+/*
+  The task heap.
+  Allocation is more-or-less LIFO and first-fit.
+ */
+static struct {
+	arena_t *empty;
+	arena_t *partial;
+	arena_t *full;
+	int     alloc;
+} theap;
+
+static int arena_is_full(arena_t *arena) {
+	return (arena->bits == ~((uintptr_t)0));
+}
+
+static int arena_is_empty(arena_t *arena) {
+	return (arena->bits == ((uintptr_t)0));
+}
+
+static task_t *new_task(void) {
+	task_t *out = NULL;
+	
+	if (theap.partial) {
+		out = arena_get_task(theap.partial);
+		runtime_assert_or(out,
+				  "failed alloc from partially-full arena");
+
+		if (arena_is_full(theap.partial)) {
+			arena_t *moving = theap.partial;
+			theap.partial = moving->next;
+
+			if (theap.partial)
+				theap.partial->prev = NULL;
+
+			moving->next = theap.full;
+			if (theap.full)
+				theap.full->prev = moving;
+
+			theap.full = moving;
+		}
+		
+	} else {
+		arena_t *moving;
+		if (theap.empty) {
+			moving = theap.empty;
+			theap.empty = NULL;
+		} else {
+			moving = map_arena();
+			if (moving == NULL)
+				return NULL;
+
+			theap.alloc += ARENA_TASKS;
+		}
+
+		moving->next = theap.partial;
+		if (theap.partial)
+			theap.partial->prev = moving;
+
+		theap.partial = moving;
+		out = arena_get_task(moving);
+		runtime_assert_or(out, "failed alloc from empty arena");
+	}
+	
+	return out;
+}
+
+/* unlink this arena from its current location in the heap */
+static void arena_unlink(arena_t **head, arena_t *arena) {
+	if (*head == arena) {
+		*head = arena->next;
+		if (arena->next) {
+			arena->next->prev = NULL;
+		}
+	} else {
+		if (arena->prev) {
+			arena->prev->next = arena->next;
+		}
+		if (arena->next) {
+			arena->next->prev = arena->prev;
+		}
+	}
+	arena->next = NULL;
+	arena->prev = NULL;
+}
+
+/* release a task back to the heap */
+static void free_task(task_t *task) {
+	runtime_assert_or(task->status == STATUS_EMPTY,
+			  "free of non-empty task");
+	arena_t *arena = task->arena;
+	int was_full = arena_is_full(arena);
+	arena_put_task(task);
+	if (was_full) {
+		arena_unlink(&theap.full, arena);
+		arena->next = theap.partial;
+		if (theap.partial)
+			theap.partial->prev = arena;
+
+		theap.partial = arena;
+	} else if (arena_is_empty(arena)) {
+		arena_unlink(&theap.partial, arena);
+		arena_t *old = theap.empty;
+		theap.empty = arena;
+	        if (old) {
+			unmap_arena(old);
+			theap.alloc -= ARENA_TASKS;
+		}
+	}
+}
 
 static noreturn _sbrt_exit(void);
+
+static void add_stats_from(arena_t *arena, tsk_stats_t *stats) {
+	int running = 0;
+	for (arena_t *a = arena; a != NULL; a = a->next) {
+		for (int i=0; i<ARENA_TASKS; ++i) {
+			switch (a->tasks[i].status) {
+			case STATUS_EMPTY:
+				stats->free++;
+				break;
+			case STATUS_PARKED:
+				stats->parked++;
+				break;
+			case STATUS_RUNNABLE:
+				stats->runnable++;
+				break;
+			case STATUS_RUNNING:
+				runtime_assert_or(running == 0,
+						  "more than 1 running task");
+				running = 1;
+				break;
+			default:
+				panic("unknown task status");
+			}
+		}
+	}
+}
 
 void get_tsk_stats(tsk_stats_t *stats) {
 	stats->free = 0;
 	stats->parked = 0;
 	stats->runnable = 0;
-	int running = 0;
 	switch (runq.t0.status) {
+	default:
+		panic("bad t0 status");
 	case STATUS_PARKED:
 		stats->parked++;
 		break;
@@ -140,42 +333,22 @@ void get_tsk_stats(tsk_stats_t *stats) {
 		stats->runnable++;
 		break;
 	case STATUS_RUNNING:
-		running = 1;
 		break;
-	default:
-		assert(0 && "bad t0 status");
 	}
-	for (int i=0; i<MAXTASKS; ++i) {
-		switch (tslab.mem[i].status) {
-		case STATUS_EMPTY:
-			stats->free++;
-			break;
-		case STATUS_PARKED:
-			stats->parked++;
-			break;
-		case STATUS_RUNNABLE:
-			stats->runnable++;
-			break;
-		case STATUS_RUNNING:
-			assert(running == 0);
-			running = 1;
-			break;
-		default:
-			assert(0 && "unknown task status!");
-		}
-	}
-	assert(running == 1);
-	assert(stats->parked == runq.parked);
+	
+	add_stats_from(theap.full, stats);
+	add_stats_from(theap.partial, stats);
+	add_stats_from(theap.empty, stats);
 }
 
-task_t *list_pop(tasklist_t *tl) {
-	if (tl->top == NULL) {
+static task_t *list_pop(tasklist_t *tl) {
+	if (tl->top == NULL)
 		return NULL;
-	}
+
 	task_t *out = tl->top;
 	tl->top = out->next;
 	if (tl->top == NULL) {
-		assert(out == tl->tail);
+		runtime_assert_or(out == tl->tail, "bad worklist state");
 		tl->tail = NULL;
 	}
 	out->next = NULL;
@@ -184,41 +357,48 @@ task_t *list_pop(tasklist_t *tl) {
 
 static void list_pushback(tasklist_t *tl, task_t *task) {
 	if (tl->top == NULL) {
-		assert(tl->tail == NULL);
+		runtime_assert_or(tl->tail == NULL, "bad worklist state");
 		tl->top = task;
 		tl->tail = task;
 		return;
 	}
-	assert(tl->tail);
+	runtime_assert_or(tl->tail, "bad worklist state");
 	tl->tail->next = task;
 	tl->tail = task;
 	task->next = NULL;
 	return;
 }
 
-/*
- * find_work() - the root of the scheduler.
- *
- * Every scheduling point ultimately calls find_work()
- * to figure out what to run next. Polling hooks should
- * be added here.
- */
+/* gift a task to one waiting to allocate */
+static task_t *task_handoff(task_t *next) {
+	task_t *work = list_pop(&runq.begin);
+	work->next = next;
+	work->status = STATUS_RUNNABLE;
+	--runq.parked;
+	return work;
+}
+
 static task_t *find_work(int must) {
 	task_t *work = list_pop(&runq.queue);
-	if (work == NULL && must) {
-		poll(-1); /* TODO: timer */
-		work = list_pop(&runq.queue);
-	}
-	if (must) {
-		assert(work && "deadlock!");
+	if (work == NULL) {
+		if (runq.begin.top) {
+			/* now we've proven we need to allocate */
+			work = task_handoff(new_task());
+		} else if (must) {
+		        poll(-1); /* TODO: timers */
+			work = list_pop(&runq.queue);
+			runtime_assert_or(work, "deadlock");
+		}
 	}
 	return work;
 }
 
 /* to de-schedule, set runq.running->status, then call swtch(find_work(1)) */
 static void swtch(task_t *next) {
-	assert(next != runq.running);
-	assert(next->status == STATUS_RUNNABLE);
+	runtime_assert_or(next != runq.running,
+			  "tried to schedule onto self");
+	runtime_assert_or(next->status == STATUS_RUNNABLE,
+			  "tried to schedule unrunnable task");
 	next->status = STATUS_RUNNING;
 	task_t *me = runq.running;
 	runq.running = next;
@@ -227,10 +407,6 @@ static void swtch(task_t *next) {
 	return;
 }
 
-/* 
- * find a runnable task; call swap 
- * returns 0 if no task is available
- */
 static int yield(int block, tasklist_t *target) {
 	task_t *next = find_work(block);
 	if (next == NULL) return 0;
@@ -259,23 +435,23 @@ static void ready(task_t *task) {
 }
 
 static void unpark(task_t *task) {
-	assert(task->status == STATUS_PARKED);
+	runtime_assert_or(task->status == STATUS_PARKED,
+			  "unpark of unparked task");
 	--runq.parked;
 	ready(task);
 }
 
 int wake(tasklist_t *tl) {
-	assert(tl != &runq.queue);
+	runtime_assert_or(tl != &runq.queue,
+			  "wake called on worklist");
 	task_t *task = list_pop(tl);
-	if (task) {
+	if (task)
 		unpark(task);
-		return 1;
-	}
-	return 0;
+
+	return (task) ? 1 : 0;
 }
 
 int wakeall(tasklist_t *tl) {
-	assert(tl != &runq.queue);
 	int out = 0;
 	while(wake(tl)) ++out;
 	return out;
@@ -287,12 +463,10 @@ static noreturn _sbrt_entry(void) {
 	_sbrt_exit();
 }
 
-/* 
- * longjmp into a task, which must be runnable
- * (sets/clobbers runq.running)
- */
+/* longjmp into a task (abandon the current one) */
 static noreturn run(task_t *task) {
-	assert(task->status == STATUS_RUNNABLE);
+	runtime_assert_or(task->status == STATUS_RUNNABLE,
+			  "run() called on unrunnable task");
 	runq.running = task;
 	task->status = STATUS_RUNNING;
 	_loadctx(&task->ctx);
@@ -302,59 +476,43 @@ static noreturn run(task_t *task) {
 static noreturn _sbrt_exit(void) {
 	/* free/clear old task state */
 	task_t *old = runq.running;
-	assert(old->status == STATUS_RUNNING);
+	runtime_assert_or(old->status == STATUS_RUNNING,
+			  "runq.running is not running");
 	old->status = STATUS_EMPTY;
 	old->start = NULL;
 	old->udata = NULL;
 
 	task_t *target;
-	/* 
-	 * micro-optimization: if someone is blocked in
-	 * spawn(), jump directly into that stack with 'next' set,
-	 * which avoids the call to slab_free here and the call
-	 * to slab_malloc on the other side. (see the corresponding
-	 * code in spawn())
-	 */
 	if (runq.begin.top) {
-		target = list_pop(&runq.begin);
-		--runq.parked;
-		target->status = STATUS_RUNNABLE;
-		target->next = old;
+		target = task_handoff(old);
 	} else {
-		slab_free(&tslab, old);
+		free_task(old);
 		target = find_work(1);
 	}
 	run(target);
 }
 
+/*
+  Create a new runnable task.
+
+  (Usually this results in de-scheduling; allocators
+  of new tasks are put into a lower-priority queue
+  than other runnable tasks.)
+ */
 void spawn(void (start)(void*), void *data) {
 	task_t *t;
 	word_t stack;
 	word_t retpc;
-
-	/* 
-	 * TODO:
-	 * if every alloc'd task is parked on i/o,
-	 * then mmap a new task (or arena of tasks).
-	 */
 	
-	/* 
-	 * We may need to wait 
-	 * to allocate; there are
-	 * a fixed number of tasks.
-	 * If there other tasks in the
-	 * queue, then enqueue rather than
-	 * attempting to malloc in order
-	 * to preserve fairness.
-	 */
-	if (runq.begin.top || (NULL == (t = slab_malloc(&tslab)))) {
-		/* we should only be woken when ->next is set */
+	if (runq.begin.top || runq.queue.top) {
 		wait(&runq.begin);
-		assert(runq.running->next);
 		t = runq.running->next;
 		runq.running->next = NULL;
+	} else {
+		t = new_task();
 	}
-	
+
+	runtime_assert_or(t, "out of memory");
 	t->udata = data;
 	t->start = start;
 	stack.ptr = t->stack;
@@ -397,56 +555,20 @@ try:
 
 extern int taskmain();
 
-/* use either PAGE_SIZE or PAGESIZE before defaulting to 4096 */
-#ifndef PAGE_SIZE
-#ifdef PAGESIZE
-#define PAGE_SIZE PAGESIZE
-#else
-#define PAGE_SIZE 4096
-#endif
-#endif
-
-#define STACK_PAGES 2 /* 8k stacks are reasonably generous */
-#define GUARD_PAGES 1
-#define TSTKSZ (STACK_PAGES*PAGE_SIZE)
-#define GSTKSZ ((STACK_PAGES+GUARD_PAGES)*PAGE_SIZE)
-#define STACK_ARENA_SIZE (GSTKSZ*MAXTASKS)
-
 ptrdiff_t stack_remaining(void) {
 	if (runq.running == &runq.t0) return -1;
 	int dummy;
 	uintptr_t stack_top = (uintptr_t)runq.running->stack;
 	uintptr_t stack_bottom = (uintptr_t)(&dummy);
-	return TSTKSZ - (ptrdiff_t)(stack_top - stack_bottom);
+	return STACK_SIZE - (ptrdiff_t)(stack_top - stack_bottom);
 }
 
 int main(void) {
-	/* 
-	 * setup t0, which
-	 * runs on the system stack.
-	 */
+	/* t0 is the system stack */
 	runq.t0.status = STATUS_RUNNING;
 	runq.running = &runq.t0;
 
-	/* map all stacks in one mapping */
-	stack_mapped = mmap(NULL, STACK_ARENA_SIZE, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANON, -1, 0);
-	assert(stack_mapped != MAP_FAILED);
-
-	/* 
-	 * set up stacks in ascending order with a guard page
-	 * at the bottom. the hope is that the bitslab
-	 * allocator will do a decent job w.r.t. locality.
-	 */
-	void *stkp = stack_mapped;
-	for (int i=0; i<MAXTASKS; ++i) {
-		tslab.mem[i].stack = stkp + GSTKSZ;
-		mprotect(stkp, PAGE_SIZE, PROT_NONE); /* mark the low page as unwriteable */
-		stkp += GSTKSZ;
-	}
-
 	pollinit();
 	
-	int ret = taskmain();
-	munmap(stack_mapped, STACK_ARENA_SIZE);
-	return ret;
+	return taskmain();
 }

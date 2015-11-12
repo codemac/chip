@@ -7,7 +7,7 @@ benchs = `{ls tests/*_bench.c | sed -e s/_bench.c// -e s/tests\///}
 
 target = `{gcc -v |[2] grep Target}
 
-CFLAGS = '-O3 -g -Wall -Werror'
+CC = gcc
 
 # detect host arch
 if (echo $target | grep -q x86_64) ARCH = amd64
@@ -17,6 +17,18 @@ if (echo $target | grep -q armv7) ARCH = arm
 if (echo $target | grep -q linux) POLLER = epoll
 if (echo $target | grep -q 'bsd\|darwin') POLLER = kqueue
 
+# detect musl-gcc
+if (test `{ whatis musl-gcc}) {
+    CC = musl-gcc
+    INCLUDE_DIR = /usr/lib/musl/include
+    LIB_DIR = /usr/lib/musl/lib
+    CFLAGS = ($CFLAGS static)
+} else {
+    INCLUDE_DIR = /usr/include
+    LIB_DIR = /usr/lib/
+}
+
+CFLAGS = '-O3 -g -Wall -Werror -static -flto' 
 mkdir -p bin
 
 fn build_tests { for (test in $tests) make bin/$test.test }
@@ -31,4 +43,4 @@ fn install { make install }
 
 fn uninstall { make uninstall }
 
-$1
+$*

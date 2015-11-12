@@ -35,19 +35,17 @@ int ioctx_destroy(ioctx_t *ctx) {
 
 void poll(int ms) {
 	int nev = epoll_wait(epfd, &events[0], 64, ms);
-	assert(nev != -1);
+	if (nev == -1) {
+		perror("epoll_wait");
+		_exit(1);
+	}
 	for (int i=0; i<nev; ++i) {
 		struct epoll_event *ev = &events[i];
 		ioctx_t *ctx = (ioctx_t *)ev->data.ptr;
-		if (ev->events&EPOLLERR) {
-			if (ctx->writer) unpark(ctx->writer);
-			if (ctx->reader) unpark(ctx->reader);
-			return;
-		}
-		if (ctx->reader && (ev->events&(EPOLLIN|EPOLLRDHUP|EPOLLHUP))) {
+		if (ctx->reader && (ev->events&(EPOLLIN|EPOLLERR|EPOLLRDHUP|EPOLLHUP))) {
 			unpark(ctx->reader);
 		}
-		if (ctx->writer && (ev->events&(EPOLLOUT))) {
+		if (ctx->writer && (ev->events&(EPOLLOUT|EPOLLERR))) {
 			unpark(ctx->writer);
 		}
 	}
