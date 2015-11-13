@@ -17,9 +17,12 @@ if (echo $target | grep -q armv7) ARCH = arm
 if (echo $target | grep -q linux) POLLER = epoll
 if (echo $target | grep -q 'bsd\|darwin') POLLER = kqueue
 
+CFLAGS = '-O3 -g -Wall -Werror'
+
 # detect musl-gcc
 if (test `{ whatis musl-gcc}) {
     CC = musl-gcc
+    CFLAGS = '-O3 -g -Wall -Werror -static -flto'
     INCLUDE_DIR = /usr/lib/musl/include
     LIB_DIR = /usr/lib/musl/lib
     CFLAGS = ($CFLAGS static)
@@ -28,7 +31,6 @@ if (test `{ whatis musl-gcc}) {
     LIB_DIR = /usr/lib/
 }
 
-CFLAGS = '-O3 -g -Wall -Werror -static -flto' 
 mkdir -p bin
 
 fn build_tests { for (test in $tests) make bin/$test.test }
