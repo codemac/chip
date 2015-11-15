@@ -40,10 +40,9 @@ install: $(INSTALLED_FILES)
 uninstall:
 	$(RM) $(INSTALLED_FILES)
 
-# benchmarks use the library in /usr/lib, so
-# they depend upon installation.
+# benchmarks link against the archive
 bin/%.bench: tests/%_bench.c $(INSTALLED_FILES)
-	$(CC) -lchip $(CFLAGS) $< -o $@
+	$(CC) $< $(CFLAGS) -lchip -o $@
 
 .PHONY: clean
 clean:
