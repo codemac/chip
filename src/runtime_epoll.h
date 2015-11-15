@@ -21,7 +21,9 @@ void pollinit(void) {
 int ioctx_init(int fd, ioctx_t *ctx) {
 	events[0].data.ptr = ctx;
 	events[0].events = EPOLLERR|EPOLLET|EPOLLIN|EPOLLOUT|EPOLLRDHUP|EPOLLHUP;
-	if (epoll_ctl(epfd, EPOLL_CTL_ADD, fd, &events[0]) < 0) return -1;
+	if (epoll_ctl(epfd, EPOLL_CTL_ADD, fd, &events[0]) < 0)
+		return -1;
+
 	ctx->fd = fd;
 	ctx->writer = NULL;
 	ctx->reader = NULL;
@@ -29,7 +31,9 @@ int ioctx_init(int fd, ioctx_t *ctx) {
 }
 
 int ioctx_destroy(ioctx_t *ctx) {
-	if (epoll_ctl(epfd, EPOLL_CTL_DEL, ctx->fd, NULL) < 0) return -1;
+	if (epoll_ctl(epfd, EPOLL_CTL_DEL, ctx->fd, NULL) < 0) 
+		return -1;
+	
 	return close(ctx->fd);
 }
 
@@ -39,14 +43,16 @@ void poll(int ms) {
 		perror("epoll_wait");
 		_exit(1);
 	}
+	
 	for (int i=0; i<nev; ++i) {
 		struct epoll_event *ev = &events[i];
 		ioctx_t *ctx = (ioctx_t *)ev->data.ptr;
-		if (ctx->reader && (ev->events&(EPOLLIN|EPOLLERR|EPOLLRDHUP|EPOLLHUP))) {
+
+		if (ctx->reader && (ev->events&(EPOLLIN|EPOLLERR|EPOLLRDHUP|EPOLLHUP)))
 			unpark(ctx->reader);
-		}
-		if (ctx->writer && (ev->events&(EPOLLOUT|EPOLLERR))) {
+		
+		if (ctx->writer && (ev->events&(EPOLLOUT|EPOLLERR)))
 			unpark(ctx->writer);
-		}
+		
 	}
 }

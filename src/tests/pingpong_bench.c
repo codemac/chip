@@ -10,7 +10,7 @@ void pong(void* nothing) {
 
 #define PONGS 10000000
 
-int taskmain(void) {
+int main(void) {
 	puts("starting ping-pong test...");
 
 	spawn(pong, NULL);

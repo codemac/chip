@@ -24,7 +24,7 @@ static void inc(void *data) {
 	return;
 }
 
-int taskmain(void) {
+int main(void) {
 	puts("running sequential stack switch test...");
 
 	for (int i=0; i<1024; ++i) {

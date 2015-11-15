@@ -20,9 +20,6 @@ void spawn(void (start)(void*), void *data);
 /* yield to the scheduler */
 void sched(void);
 
-/* chip defines main() */
-int main(void);
-
 typedef struct {
 	int runnable; /* number of currently-runnable tasks */
 	int parked;   /* number of parked tasks */

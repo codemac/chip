@@ -12,10 +12,11 @@
 #error "unsupported OS"
 #endif
 
+/* run-of-the-mill gcc grossness */
 #define noreturn void __attribute__((noreturn))
-
+#define cold __attribute((cold))
+#define CHIP_INIT __attribute__((constructor))
 #define clobber_mem() __asm__("" : : : "memory")
-
 #define unlikely(expr) __builtin_expect(!!(expr), 0)
 
 /* try not to consume any stack space with runtime assertions */
@@ -24,7 +25,7 @@
 
 #define panic(str) __panicstr(str, sizeof(str)-1)
 
-static noreturn __attribute__((cold)) __panicstr(const char *msg, size_t len) {
+cold static noreturn  __panicstr(const char *msg, size_t len) {
 	write(2, msg, len);
 	raise(SIGABRT);
 	_exit(1); /* we probably won't get here. */
@@ -138,9 +139,9 @@ struct arena_s {
  */
 static arena_t *map_arena(void) {
 	void *mem = mmap(NULL, ARENA_MAPPING, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANON, -1, 0);
-	if (mem == MAP_FAILED) {
+	if (mem == MAP_FAILED)
 		return NULL;
-	}
+	
 	
 	arena_t *out = (arena_t *)(mem + ARENA_STACK_MAPPING);
 
@@ -251,16 +252,16 @@ static task_t *new_task(void) {
 static void arena_unlink(arena_t **head, arena_t *arena) {
 	if (*head == arena) {
 		*head = arena->next;
-		if (arena->next) {
+		if (arena->next)
 			arena->next->prev = NULL;
-		}
+		
 	} else {
-		if (arena->prev) {
+		if (arena->prev)
 			arena->prev->next = arena->next;
-		}
-		if (arena->next) {
+		
+		if (arena->next)
 			arena->next->prev = arena->prev;
-		}
+		
 	}
 	arena->next = NULL;
 	arena->prev = NULL;
@@ -419,7 +420,6 @@ void sched(void) {
 	runq.running->status = STATUS_RUNNABLE;
 	if (yield(0, &runq.queue) == 0)
 		runq.running->status = STATUS_RUNNING;
-	return;
 }
 
 /* park task on tasklist; deschedule */
@@ -553,22 +553,20 @@ try:
 	return amt;
 }
 
-extern int taskmain();
-
 ptrdiff_t stack_remaining(void) {
-	if (runq.running == &runq.t0) return -1;
 	int dummy;
 	uintptr_t stack_top = (uintptr_t)runq.running->stack;
 	uintptr_t stack_bottom = (uintptr_t)(&dummy);
-	return STACK_SIZE - (ptrdiff_t)(stack_top - stack_bottom);
+	/* guess at system stack being at least 2MB */
+	uintptr_t stack_size = (runq.running == &runq.t0) ? (1<<21) : STACK_SIZE;
+	return stack_size - (ptrdiff_t)(stack_top - stack_bottom);
 }
 
-int main(void) {
-	/* t0 is the system stack */
+/* library bootstrap - set main()'s stack as t0 */
+CHIP_INIT void chip_init(void) {
 	runq.t0.status = STATUS_RUNNING;
 	runq.running = &runq.t0;
-
+	int dummy;
+	runq.running->stack = &dummy;
 	pollinit();
-	
-	return taskmain();
 }

@@ -66,7 +66,7 @@ void pipe_reader(void *data) {
 	return;
 }
 
-int taskmain(void) {
+int main(void) {
 	puts("running pipe tests...");
 
 	int pipefd[2];
