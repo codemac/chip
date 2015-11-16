@@ -86,12 +86,58 @@ typedef struct {
 	task_t *reader;
 } ioctx_t;
 
+/*
+ * ioctx_init() initializes the given ioctx_t
+ * to refer to the provided file descriptor.
+ * The file descriptor must already have O_NONBLOCK
+ * set. On success, 0 is returned. On error,
+ * -1 is returned, and errno will be set.
+ */
 int ioctx_init(int fd, ioctx_t *ctx);
 
+
+/*
+ * ioctx_destroy() invalidates the given
+ * ioctx_t and closes the associated file
+ * descriptor. On success, 0 is returned.
+ * On error, -1 is returned, and errno
+ * will be set.
+ */
 int ioctx_destroy(ioctx_t *ctx);
 
+/*
+ * ioctx_write() writes the buffer starting
+ * at 'buf' up to 'bytes' bytes, and returns
+ * the number of bytes written. On error, -1
+ * will be returned, and errno will be set.
+ * If the file descriptor in question is not
+ * available for writing (EAGAIN), then the
+ * scheduler will be invoked, and the write
+ * will be re-tried when the operating system
+ * says the fd is writeable.
+ *
+ * Two tasks trying to perform writes on the
+ * same fd at the same time will have undefined 
+ * behavior, but the program may abort if the runtime
+ * notices.
+ */
 ssize_t ioctx_write(ioctx_t *ctx, char *buf, size_t bytes);
 
+/*
+ * ioctx_read() reads into the buffer starting
+ * at 'buf' up to 'bytes' bytes, and returns
+ * the number of bytes read. On error, -1
+ * will be returned, and errno will be set.
+ * If the file descriptor in question is not
+ * available for reading (EAGAIN), then the
+ * scheduler will be invoked, and the read
+ * will be re-tried when the operating system
+ * says the fd is readable.
+ *
+ * Two tasks trying to perform reads on the same
+ * fd at the same time will have undefine behavior,
+ * but may abort the program if the runtime notices.
+ */
 ssize_t ioctx_read(ioctx_t *ctx, char *buf, size_t bytes);
 
 #endif /* __CHIP_RUNTIME_H_ */

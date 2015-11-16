@@ -2,16 +2,15 @@
 #include <unistd.h>
 #include <stdio.h>
 #include <errno.h>
-#include <assert.h>
 #include <sys/event.h>
 
-static void unpark(task_t *t);
+static void io_unpark(task_t *t);
 
 static int kqfd;
 
 static struct kevent events[64];
 
-void pollinit(void) {
+static void pollinit(void) {
 	kqfd = kqueue();
 	if (kqfd == -1) {
 		perror("kqueue");
@@ -49,7 +48,7 @@ int ioctx_destroy(ioctx_t *ctx) {
 	return close(ctx->fd);
 }
 
-void poll(int ms) {
+static void poll(int ms) {
 	struct timespec *t = NULL;
 	struct timespec ts;
 	if (ms != -1) {
@@ -57,8 +56,19 @@ void poll(int ms) {
 		ts.tv_sec = 0;
 		t = &ts;
 	}
-	int nev = kevent(kqfd, NULL, 0, &events[0], 64, t);
-	assert(nev != -1);
+
+	int nev;
+kevent_wait:
+	nev = kevent(kqfd, NULL, 0, &events[0], 64, t);
+	if (nev == -1) {
+		switch (errno) {			
+		case EINTR:
+			goto kevent_wait;
+		default:
+			perror("kevent");
+			_exit(1);
+		}
+	}
 	handle_events(0, nev);
 }
 
@@ -69,11 +79,11 @@ static void handle_events(int off, int num) {
 		switch (ev->filter) {
 		case EVFILT_WRITE:
 			if (ctx->writer) 
-				unpark(ctx->writer);
+				io_unpark(ctx->writer);
 			break;
 		case EVFILT_READ:
 			if (ctx->reader) 
-				unpark(ctx->reader);
+				io_unpark(ctx->reader);
 			break;
 		}
 	}

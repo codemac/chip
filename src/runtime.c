@@ -13,19 +13,18 @@
 #endif
 
 /* run-of-the-mill gcc grossness */
-#define noreturn void __attribute__((noreturn))
-#define cold __attribute((cold))
-#define CHIP_INIT __attribute__((constructor))
 #define clobber_mem() __asm__("" : : : "memory")
 #define unlikely(expr) __builtin_expect(!!(expr), 0)
 
 /* try not to consume any stack space with runtime assertions */
-#define runtime_assert_or(expr, str) if (unlikely(!(expr)))	\
+#define runtime_assert_msg(expr, str) if (unlikely(!(expr))) \
 	{ __panicstr(str, sizeof(str)-1); }
 
 #define panic(str) __panicstr(str, sizeof(str)-1)
 
-cold static noreturn  __panicstr(const char *msg, size_t len) {
+__attribute__((cold))
+__attribute__((noreturn))
+static void  __panicstr(const char *msg, size_t len) {
 	write(2, msg, len);
 	raise(SIGABRT);
 	_exit(1); /* we probably won't get here. */
@@ -81,7 +80,9 @@ static inline void setup(regctx_t *ctx, word_t stack, word_t retpc) {
 }
 
 extern void _swapctx(regctx_t *save, const regctx_t *load);
-extern noreturn _loadctx(const regctx_t *load);
+
+__attribute__((noreturn))
+extern void _loadctx(const regctx_t *load);
 
 /* possible task statuses */
 enum {
@@ -89,6 +90,7 @@ enum {
 	STATUS_RUNNABLE, /* able to run (use swapctx()) */
 	STATUS_RUNNING,  /* running now */
 	STATUS_PARKED,   /* was running; waiting for event */
+	STATUS_IOWAIT,   /* waiting for poller */
 };
 
 typedef struct arena_s arena_t;
@@ -164,12 +166,15 @@ static void unmap_arena(arena_t *arena) {
 
 static task_t *arena_get_task(arena_t *arena) {
 	uintptr_t v = ~(arena->bits);
-	runtime_assert_or(v, "alloc from full arena");
+	runtime_assert_msg(v, "alloc from full arena");
 	int index = __builtin_ffsl(v)-1;
 	task_t *out = &arena->tasks[index];
-	runtime_assert_or(out->status == STATUS_EMPTY,
+
+	runtime_assert_msg(out->status == STATUS_EMPTY,
 			  "fresh task isn't empty");
-	runtime_assert_or(out->index == index, "inconsistent task index");
+	runtime_assert_msg(out->index == index,
+			   "inconsistent task index");
+
 	/* set index bit  */
 	arena->bits |= ((uintptr_t)1<<index);
 	return out;
@@ -179,7 +184,7 @@ static void arena_put_task(task_t *task) {
 	arena_t *arena = task->arena;
 	uintptr_t old = arena->bits;
 	arena->bits &= ~((uintptr_t)1<<(task->index));
-	runtime_assert_or(arena->bits != old, "double-free");
+	runtime_assert_msg(arena->bits != old, "double-free");
 }
 
 /*
@@ -206,7 +211,7 @@ static task_t *new_task(void) {
 	
 	if (theap.partial) {
 		out = arena_get_task(theap.partial);
-		runtime_assert_or(out,
+		runtime_assert_msg(out,
 				  "failed alloc from partially-full arena");
 
 		if (arena_is_full(theap.partial)) {
@@ -242,7 +247,7 @@ static task_t *new_task(void) {
 
 		theap.partial = moving;
 		out = arena_get_task(moving);
-		runtime_assert_or(out, "failed alloc from empty arena");
+		runtime_assert_msg(out, "failed alloc from empty arena");
 	}
 	
 	return out;
@@ -269,7 +274,7 @@ static void arena_unlink(arena_t **head, arena_t *arena) {
 
 /* release a task back to the heap */
 static void free_task(task_t *task) {
-	runtime_assert_or(task->status == STATUS_EMPTY,
+	runtime_assert_msg(task->status == STATUS_EMPTY,
 			  "free of non-empty task");
 	arena_t *arena = task->arena;
 	int was_full = arena_is_full(arena);
@@ -292,7 +297,8 @@ static void free_task(task_t *task) {
 	}
 }
 
-static noreturn _sbrt_exit(void);
+__attribute__((noreturn))
+static void _sbrt_exit(void);
 
 static void add_stats_from(arena_t *arena, tsk_stats_t *stats) {
 	int running = 0;
@@ -302,6 +308,7 @@ static void add_stats_from(arena_t *arena, tsk_stats_t *stats) {
 			case STATUS_EMPTY:
 				stats->free++;
 				break;
+			case STATUS_IOWAIT:
 			case STATUS_PARKED:
 				stats->parked++;
 				break;
@@ -309,7 +316,7 @@ static void add_stats_from(arena_t *arena, tsk_stats_t *stats) {
 				stats->runnable++;
 				break;
 			case STATUS_RUNNING:
-				runtime_assert_or(running == 0,
+				runtime_assert_msg(running == 0,
 						  "more than 1 running task");
 				running = 1;
 				break;
@@ -327,6 +334,7 @@ void get_tsk_stats(tsk_stats_t *stats) {
 	switch (runq.t0.status) {
 	default:
 		panic("bad t0 status");
+	case STATUS_IOWAIT:
 	case STATUS_PARKED:
 		stats->parked++;
 		break;
@@ -349,7 +357,7 @@ static task_t *list_pop(tasklist_t *tl) {
 	task_t *out = tl->top;
 	tl->top = out->next;
 	if (tl->top == NULL) {
-		runtime_assert_or(out == tl->tail, "bad worklist state");
+		runtime_assert_msg(out == tl->tail, "bad worklist state");
 		tl->tail = NULL;
 	}
 	out->next = NULL;
@@ -358,12 +366,12 @@ static task_t *list_pop(tasklist_t *tl) {
 
 static void list_pushback(tasklist_t *tl, task_t *task) {
 	if (tl->top == NULL) {
-		runtime_assert_or(tl->tail == NULL, "bad worklist state");
+		runtime_assert_msg(tl->tail == NULL, "bad worklist state");
 		tl->top = task;
 		tl->tail = task;
 		return;
 	}
-	runtime_assert_or(tl->tail, "bad worklist state");
+	runtime_assert_msg(tl->tail, "bad worklist state");
 	tl->tail->next = task;
 	tl->tail = task;
 	task->next = NULL;
@@ -388,7 +396,7 @@ static task_t *find_work(int must) {
 		} else if (must) {
 		        poll(-1); /* TODO: timers */
 			work = list_pop(&runq.queue);
-			runtime_assert_or(work, "deadlock");
+			runtime_assert_msg(work, "deadlock");
 		}
 	}
 	return work;
@@ -396,9 +404,9 @@ static task_t *find_work(int must) {
 
 /* to de-schedule, set runq.running->status, then call swtch(find_work(1)) */
 static void swtch(task_t *next) {
-	runtime_assert_or(next != runq.running,
+	runtime_assert_msg(next != runq.running,
 			  "tried to schedule onto self");
-	runtime_assert_or(next->status == STATUS_RUNNABLE,
+	runtime_assert_msg(next->status == STATUS_RUNNABLE,
 			  "tried to schedule unrunnable task");
 	next->status = STATUS_RUNNING;
 	task_t *me = runq.running;
@@ -435,14 +443,21 @@ static void ready(task_t *task) {
 }
 
 static void unpark(task_t *task) {
-	runtime_assert_or(task->status == STATUS_PARKED,
+	runtime_assert_msg(task->status == STATUS_PARKED,
 			  "unpark of unparked task");
 	--runq.parked;
 	ready(task);
 }
 
+static void io_unpark(task_t *task) {
+	runtime_assert_msg(task->status == STATUS_IOWAIT,
+			   "unpark of unparked task");
+	--runq.parked;
+	ready(task);
+}
+
 int wake(tasklist_t *tl) {
-	runtime_assert_or(tl != &runq.queue,
+	runtime_assert_msg(tl != &runq.queue,
 			  "wake called on worklist");
 	task_t *task = list_pop(tl);
 	if (task)
@@ -458,14 +473,16 @@ int wakeall(tasklist_t *tl) {
 }
 
 /* task entry point */
-static noreturn _sbrt_entry(void) {
+__attribute__((noreturn))
+static void _sbrt_entry(void) {
 	runq.running->start(runq.running->udata);
 	_sbrt_exit();
 }
 
 /* longjmp into a task (abandon the current one) */
-static noreturn run(task_t *task) {
-	runtime_assert_or(task->status == STATUS_RUNNABLE,
+__attribute__((noreturn))
+static void run(task_t *task) {
+	runtime_assert_msg(task->status == STATUS_RUNNABLE,
 			  "run() called on unrunnable task");
 	runq.running = task;
 	task->status = STATUS_RUNNING;
@@ -473,10 +490,11 @@ static noreturn run(task_t *task) {
 }
 
 /* free running task; jump to next available work */
-static noreturn _sbrt_exit(void) {
+__attribute__((noreturn))
+static void _sbrt_exit(void) {
 	/* free/clear old task state */
 	task_t *old = runq.running;
-	runtime_assert_or(old->status == STATUS_RUNNING,
+	runtime_assert_msg(old->status == STATUS_RUNNING,
 			  "runq.running is not running");
 	old->status = STATUS_EMPTY;
 	old->start = NULL;
@@ -512,7 +530,7 @@ void spawn(void (start)(void*), void *data) {
 		t = new_task();
 	}
 
-	runtime_assert_or(t, "out of memory");
+	runtime_assert_msg(t, "out of memory");
 	t->udata = data;
 	t->start = start;
 	stack.ptr = t->stack;
@@ -524,7 +542,7 @@ void spawn(void (start)(void*), void *data) {
 
 static void park_and_wait(task_t **addr) {
 	*addr = runq.running;
-	runq.running->status = STATUS_PARKED;
+	runq.running->status = STATUS_IOWAIT;
 	++runq.parked;
 	swtch(find_work(1));
 	*addr = NULL;
@@ -536,6 +554,8 @@ ssize_t ioctx_write(ioctx_t *ctx, char *buf, size_t bytes) {
 try:
 	amt = write(ctx->fd, buf, bytes);
 	if ((amt == -1) && (errno == EAGAIN)) {
+		runtime_assert_msg(ctx->writer == NULL,
+				   "multiple writers on an ioctx");
 		park_and_wait(&ctx->writer);
 		goto try;
 	}
@@ -547,6 +567,8 @@ ssize_t ioctx_read(ioctx_t *ctx, char *buf, size_t max) {
 try:
 	amt = read(ctx->fd, buf, max);
 	if ((amt == -1) && (errno == EAGAIN)) {
+		runtime_assert_msg(ctx->reader == NULL,
+				   "multiple readers on an ioctx");
 		park_and_wait(&ctx->reader);
 		goto try;
 	}
@@ -563,7 +585,8 @@ ptrdiff_t stack_remaining(void) {
 }
 
 /* library bootstrap - set main()'s stack as t0 */
-CHIP_INIT void chip_init(void) {
+__attribute__((constructor))
+void chip_init(void) {
 	runq.t0.status = STATUS_RUNNING;
 	runq.running = &runq.t0;
 	int dummy;

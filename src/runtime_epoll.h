@@ -4,7 +4,7 @@
 #include <stdio.h>
 #include <errno.h>
 
-static void unpark(task_t *t);
+static void io_unpark(task_t *t);
 
 static int epfd;
 
@@ -37,11 +37,18 @@ int ioctx_destroy(ioctx_t *ctx) {
 	return close(ctx->fd);
 }
 
-void poll(int ms) {
-	int nev = epoll_wait(epfd, &events[0], 64, ms);
+static void poll(int ms) {
+	int nev;
+entry:
+       	nev = epoll_wait(epfd, &events[0], 64, ms);
 	if (nev == -1) {
-		perror("epoll_wait");
-		_exit(1);
+		switch (errno) {
+		case EINTR:
+			goto entry;
+		default:
+			perror("epoll_wait");
+			_exit(1);
+		}
 	}
 	
 	for (int i=0; i<nev; ++i) {
@@ -49,10 +56,10 @@ void poll(int ms) {
 		ioctx_t *ctx = (ioctx_t *)ev->data.ptr;
 
 		if (ctx->reader && (ev->events&(EPOLLIN|EPOLLERR|EPOLLRDHUP|EPOLLHUP)))
-			unpark(ctx->reader);
+			io_unpark(ctx->reader);
 		
 		if (ctx->writer && (ev->events&(EPOLLOUT|EPOLLERR)))
-			unpark(ctx->writer);
+			io_unpark(ctx->writer);
 		
 	}
 }
