@@ -1,6 +1,6 @@
 # NOTE: `make` is run from the build script, which detects host arch and OS
 
-RUNTIME_HEADERS := runtime.h runtime_$(POLLER).h
+RUNTIME_HEADERS := runtime.h chip.h runtime_$(POLLER).h
 RUNTIME_SOURCE := runtime.c context_$(ARCH).s
 
 # trigger re-compilation when one of the headers changes
