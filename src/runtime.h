@@ -24,14 +24,24 @@ typedef struct {
 	int runnable; /* number of currently-runnable tasks */
 	int parked;   /* number of parked tasks */
 	int free;     /* number of free (unused) tasks */
+	int arenas;   /* number of task arenas currently mapped */
 } tsk_stats_t;
 
+/*
+ * get_tsk_stats() traverses the entire task
+ * heap and returns information about the number
+ * of tasks in different scheduling states. (Also,
+ * some sanity checking is performed internally.)
+ * This should probably only ever be used in test code.
+ */
 void get_tsk_stats(tsk_stats_t *);
 
 /*
- * stack_remaining returns the number of bytes
- * remaining on the current task stack, or -1
- * if it is called while on the same stack as main().
+ * stack_remaining() returns the number
+ * of bytes remaining on the current stack.
+ * (For the main() stack, it is presumed that
+ * the program originally started with at least
+ * 2MB of stack.)
  */
 ptrdiff_t stack_remaining(void);
 

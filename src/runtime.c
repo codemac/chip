@@ -62,17 +62,25 @@ typedef struct {
 #endif
 } regctx_t;
 
+/* try to detect stack smashing by inserting a canary at the top */
+#define STACK_MAGIC 0xfeedbeef
+
 static inline void setup(regctx_t *ctx, word_t stack, word_t retpc) {
 #ifdef __x86_64__
-	/* 
+	stack.val -= 8;
+	*(uintptr_t *)stack.ptr = STACK_MAGIC;
+        /* 
 	   _sbrt_entry() presumes entry on an un-even stack, so we need
 	   the stack to be 8- (but not 16-)byte aligned when we return
 	   from the context we're creating.
 	 */
-	stack.val -= 16;
+	stack.val -= 8;
 	ctx->rsp = stack;
 	*(uintptr_t *)stack.ptr = retpc.val;
 #elif __arm__
+	stack.val -= 4;
+	*(uintptr_t *)stack.ptr = STACK_MAGIC;
+	stack.val -= 4; /* keep stack 8-byte aligned */
 	ctx->r13 = stack;
 	ctx->r14 = retpc;
 #endif
@@ -115,11 +123,9 @@ static struct{
 	task_t     t0;       /* the root task (taskmain()) */
 } runq;
 
-#define STACK_SIZE 8192
-#define GUARD_SIZE 4096
-#define FULL_STACK_SIZE (STACK_SIZE+GUARD_SIZE)
+#define STACK_SIZE 12288 /* three pages */
 #define ARENA_TASKS (sizeof(uintptr_t)*8)
-#define ARENA_STACK_MAPPING (ARENA_TASKS*FULL_STACK_SIZE)
+#define ARENA_STACK_MAPPING (ARENA_TASKS*STACK_SIZE)
 /* all the stacks, plus the arena structure itself */
 #define ARENA_MAPPING (ARENA_STACK_MAPPING+sizeof(arena_t))
 
@@ -148,9 +154,8 @@ static arena_t *map_arena(void) {
 	arena_t *out = (arena_t *)(mem + ARENA_STACK_MAPPING);
 
 	for (int i=0; i<ARENA_TASKS; ++i) {
-		void *bottom = mem + (i * FULL_STACK_SIZE);
-		void *top = bottom + FULL_STACK_SIZE;
-		mprotect(bottom, GUARD_SIZE, PROT_NONE);
+		void *bottom = mem + (i * STACK_SIZE);
+		void *top = bottom + STACK_SIZE;
 		out->tasks[i].stack = top;
 		out->tasks[i].arena = out;
 		out->tasks[i].index = i;
@@ -287,6 +292,12 @@ static void free_task(task_t *task) {
 
 		theap.partial = arena;
 	} else if (arena_is_empty(arena)) {
+		/*
+		  TODO: right now we release any extra
+		  empty arenas, but we may want to preserve
+		  more than one (or maybe remap the arenas
+		  to make one larger one...?)
+		 */
 		arena_unlink(&theap.partial, arena);
 		arena_t *old = theap.empty;
 		theap.empty = arena;
@@ -303,6 +314,7 @@ static void _sbrt_exit(void);
 static void add_stats_from(arena_t *arena, tsk_stats_t *stats) {
 	int running = 0;
 	for (arena_t *a = arena; a != NULL; a = a->next) {
+		stats->arenas++;
 		for (int i=0; i<ARENA_TASKS; ++i) {
 			switch (a->tasks[i].status) {
 			case STATUS_EMPTY:
@@ -331,6 +343,7 @@ void get_tsk_stats(tsk_stats_t *stats) {
 	stats->free = 0;
 	stats->parked = 0;
 	stats->runnable = 0;
+	stats->arenas = 0;
 	switch (runq.t0.status) {
 	default:
 		panic("bad t0 status");
@@ -402,12 +415,23 @@ static task_t *find_work(int must) {
 	return work;
 }
 
+static void smashing_check(task_t *task) {
+	uintptr_t magic = *(uintptr_t *)(task->stack - sizeof(uintptr_t));
+	runtime_assert_msg(magic == STACK_MAGIC,
+			   "stack smashing detected!!!");
+}
+
 /* to de-schedule, set runq.running->status, then call swtch(find_work(1)) */
 static void swtch(task_t *next) {
 	runtime_assert_msg(next != runq.running,
 			  "tried to schedule onto self");
 	runtime_assert_msg(next->status == STATUS_RUNNABLE,
 			  "tried to schedule unrunnable task");
+
+	/* we can't really write a canary to t0*/
+	if (next != &runq.t0)
+		smashing_check(next);
+
 	next->status = STATUS_RUNNING;
 	task_t *me = runq.running;
 	runq.running = next;
@@ -579,9 +603,12 @@ ptrdiff_t stack_remaining(void) {
 	int dummy;
 	uintptr_t stack_top = (uintptr_t)runq.running->stack;
 	uintptr_t stack_bottom = (uintptr_t)(&dummy);
-	/* guess at system stack being at least 2MB */
+
+        /* guess at system stack being at least 2MB */
 	uintptr_t stack_size = (runq.running == &runq.t0) ? (1<<21) : STACK_SIZE;
-	return stack_size - (ptrdiff_t)(stack_top - stack_bottom);
+	ptrdiff_t out = stack_size - (ptrdiff_t)(stack_top - stack_bottom);
+	runtime_assert_msg(out >= 0, "stack overflow");
+	return out;
 }
 
 /* library bootstrap - set main()'s stack as t0 */
