@@ -18,7 +18,6 @@ static void inc(void *data) {
 		get_tsk_stats(&stats);
 		assert(stats.parked == 1);
 		post(&sema);
-		assert(stack_remaining() > 8000);
 	}
 	return;
 }
@@ -42,8 +41,6 @@ int main(void) {
 	
 	/* no tasks to run -- should return immediately */
 	sched();
-
-	assert(stack_remaining() > 8192);
 	
 	/* spawn tasks that run 'inc' */
 	for (int i=0; i<INCS; ++i) {

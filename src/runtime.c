@@ -62,29 +62,23 @@ typedef struct {
 #endif
 } regctx_t;
 
-/* try to detect stack smashing by inserting a canary at the top */
-#define STACK_MAGIC 0xfeedbeef
+/* ABI-specific register/stack setup. Unavoidably hairy. */
+static inline void setup(regctx_t *ctx, word_t stack, 
+			 word_t retpc, uintptr_t magic) {
+	/* push magic bytes onto the stack */
+	stack.val -= sizeof(uintptr_t);
+	*(uintptr_t *)stack.ptr = magic;
 
-static inline void setup(regctx_t *ctx, word_t stack, word_t retpc) {
+	/* most ABIs expect 2-word aligned call frames */
+	stack.val -= sizeof(uintptr_t);
+
 #ifdef __x86_64__
-	stack.val -= 8;
-	*(uintptr_t *)stack.ptr = STACK_MAGIC;
-        /* 
-	   _sbrt_entry() presumes entry on an un-even stack, so we need
-	   the stack to be 8- (but not 16-)byte aligned when we return
-	   from the context we're creating.
-	 */
-	stack.val -= 8;
 	ctx->rsp = stack;
 	*(uintptr_t *)stack.ptr = retpc.val;
 #elif __arm__
-	stack.val -= 4;
-	*(uintptr_t *)stack.ptr = STACK_MAGIC;
-	stack.val -= 4; /* keep stack 8-byte aligned */
 	ctx->r13 = stack;
 	ctx->r14 = retpc;
 #endif
-	return;
 }
 
 extern void _swapctx(regctx_t *save, const regctx_t *load);
@@ -121,6 +115,7 @@ static struct{
 	int        parked;   /* count of parked tasks */
 	tasklist_t begin;    /* blocking requests to newtask() */
 	task_t     t0;       /* the root task (taskmain()) */
+	uintptr_t  t0_magic; /* t0->stack points here */
 } runq;
 
 #define STACK_SIZE 12288 /* three pages */
@@ -142,21 +137,20 @@ struct arena_s {
   The arena struct itself occupies the memory beyond
   all of the stacks.
   +------------------------------- ... ----------+
-  |guard|   stack   |guard|            | arena   |
+  |  stack  |  stack  |  stack  |       arena    |
   +------------------------------- ... ----------+
  */
 static arena_t *map_arena(void) {
-	void *mem = mmap(NULL, ARENA_MAPPING, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANON, -1, 0);
+	void *mem = mmap(NULL, ARENA_MAPPING, PROT_READ|PROT_WRITE,
+			 MAP_PRIVATE|MAP_ANON, -1, 0);
 	if (mem == MAP_FAILED)
 		return NULL;
-	
 	
 	arena_t *out = (arena_t *)(mem + ARENA_STACK_MAPPING);
 
 	for (int i=0; i<ARENA_TASKS; ++i) {
 		void *bottom = mem + (i * STACK_SIZE);
-		void *top = bottom + STACK_SIZE;
-		out->tasks[i].stack = top;
+		out->tasks[i].stack = bottom + STACK_SIZE;
 		out->tasks[i].arena = out;
 		out->tasks[i].index = i;
 	}
@@ -176,7 +170,7 @@ static task_t *arena_get_task(arena_t *arena) {
 	task_t *out = &arena->tasks[index];
 
 	runtime_assert_msg(out->status == STATUS_EMPTY,
-			  "fresh task isn't empty");
+			   "fresh task isn't empty");
 	runtime_assert_msg(out->index == index,
 			   "inconsistent task index");
 
@@ -192,10 +186,7 @@ static void arena_put_task(task_t *task) {
 	runtime_assert_msg(arena->bits != old, "double-free");
 }
 
-/*
-  The task heap.
-  Allocation is more-or-less LIFO and first-fit.
- */
+/* The task heap. */
 static struct {
 	arena_t *empty;
 	arena_t *partial;
@@ -415,10 +406,19 @@ static task_t *find_work(int must) {
 	return work;
 }
 
-static void smashing_check(task_t *task) {
+/*
+	Each stack/task has a magic number that occupies
+	the top word. If we find a stack without this, then
+	a badly-behaved program clobbered it.
+ */
+static inline uintptr_t stack_magic(task_t *task) {
+	return ((uintptr_t)task) ^ (((uintptr_t)task->stack)>>12);
+}
+
+static inline void smashing_check(task_t *task) {
 	uintptr_t magic = *(uintptr_t *)(task->stack - sizeof(uintptr_t));
-	runtime_assert_msg(magic == STACK_MAGIC,
-			   "stack smashing detected!!!");
+	runtime_assert_msg(magic == stack_magic(task),
+			   "stack overflow detected");
 }
 
 /* to de-schedule, set runq.running->status, then call swtch(find_work(1)) */
@@ -428,9 +428,7 @@ static void swtch(task_t *next) {
 	runtime_assert_msg(next->status == STATUS_RUNNABLE,
 			  "tried to schedule unrunnable task");
 
-	/* we can't really write a canary to t0*/
-	if (next != &runq.t0)
-		smashing_check(next);
+	smashing_check(next);
 
 	next->status = STATUS_RUNNING;
 	task_t *me = runq.running;
@@ -492,7 +490,7 @@ int wake(tasklist_t *tl) {
 
 int wakeall(tasklist_t *tl) {
 	int out = 0;
-	while(wake(tl)) ++out;
+	while (wake(tl)) ++out;
 	return out;
 }
 
@@ -534,6 +532,8 @@ static void _sbrt_exit(void) {
 	run(target);
 }
 
+static inline uintptr_t stack_magic(task_t *);
+
 /*
   Create a new runnable task.
 
@@ -541,7 +541,7 @@ static void _sbrt_exit(void) {
   of new tasks are put into a lower-priority queue
   than other runnable tasks.)
  */
-void spawn(void (start)(void*), void *data) {
+void spawn(void (*start)(void*), void *data) {
 	task_t *t;
 	word_t stack;
 	word_t retpc;
@@ -559,7 +559,7 @@ void spawn(void (start)(void*), void *data) {
 	t->start = start;
 	stack.ptr = t->stack;
 	retpc.ptr = _sbrt_entry;
-	setup(&t->ctx, stack, retpc);
+	setup(&t->ctx, stack, retpc, stack_magic(t));
 	ready(t);
 	return;
 }
@@ -599,24 +599,18 @@ try:
 	return amt;
 }
 
-ptrdiff_t stack_remaining(void) {
-	int dummy;
-	uintptr_t stack_top = (uintptr_t)runq.running->stack;
-	uintptr_t stack_bottom = (uintptr_t)(&dummy);
-
-        /* guess at system stack being at least 2MB */
-	uintptr_t stack_size = (runq.running == &runq.t0) ? (1<<21) : STACK_SIZE;
-	ptrdiff_t out = stack_size - (ptrdiff_t)(stack_top - stack_bottom);
-	runtime_assert_msg(out >= 0, "stack overflow");
-	return out;
-}
-
 /* library bootstrap - set main()'s stack as t0 */
 __attribute__((constructor))
 void chip_init(void) {
 	runq.t0.status = STATUS_RUNNING;
 	runq.running = &runq.t0;
-	int dummy;
-	runq.running->stack = &dummy;
+
+	/*
+		t0 has a fake top-of-stack pointer
+		in order to make the stack-smashing 
+		detector happy.
+	 */
+	runq.t0.stack = ((void *)(&runq.t0_magic)) + sizeof(uintptr_t);
+	runq.t0_magic = stack_magic(&runq.t0);
 	pollinit();
 }

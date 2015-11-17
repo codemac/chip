@@ -37,15 +37,6 @@ typedef struct {
 void get_tsk_stats(tsk_stats_t *);
 
 /*
- * stack_remaining() returns the number
- * of bytes remaining on the current stack.
- * (For the main() stack, it is presumed that
- * the program originally started with at least
- * 2MB of stack.)
- */
-ptrdiff_t stack_remaining(void);
-
-/*
  * The following primitives can be used
  * to build higher-level synchronization 
  * abstractions like mutexes and semaphores.

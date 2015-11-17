@@ -13,10 +13,6 @@
 static int count;
 static sema_t sema;
 
-static void stkchk(void *nothing) {
-	assert(stack_remaining() > 8000);
-}
-
 static void inc(void *data) {
 	if (++count == INCS) {
 		post(&sema);
@@ -26,11 +22,6 @@ static void inc(void *data) {
 
 int main(void) {
 	puts("running sequential stack switch test...");
-
-	for (int i=0; i<1024; ++i) {
-		spawn(stkchk, NULL);
-	}
-	sched();
 	
 	/* spawn tasks that run 'inc' */
 	clock_t t = clock();
