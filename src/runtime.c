@@ -112,7 +112,8 @@ struct task_s {
 static struct{
 	task_t     *running;
 	tasklist_t queue;    /* runnable */
-	int        parked;   /* count of parked tasks */
+	int        parked;   /* # of parked tasks */
+	int        iowait;   /* # of tasks waiting for i/o */
 	tasklist_t begin;    /* blocking requests to newtask() */
 	task_t     t0;       /* the root task (taskmain()) */
 	uintptr_t  t0_magic; /* t0->stack points here */
@@ -271,7 +272,7 @@ static void arena_unlink(arena_t **head, arena_t *arena) {
 /* release a task back to the heap */
 static void free_task(task_t *task) {
 	runtime_assert_msg(task->status == STATUS_EMPTY,
-			  "free of non-empty task");
+			   "free of non-empty task");
 	arena_t *arena = task->arena;
 	int was_full = arena_is_full(arena);
 	arena_put_task(task);
@@ -312,6 +313,8 @@ static void add_stats_from(arena_t *arena, tsk_stats_t *stats) {
 				stats->free++;
 				break;
 			case STATUS_IOWAIT:
+				stats->iowait++;
+				break;
 			case STATUS_PARKED:
 				stats->parked++;
 				break;
@@ -320,7 +323,7 @@ static void add_stats_from(arena_t *arena, tsk_stats_t *stats) {
 				break;
 			case STATUS_RUNNING:
 				runtime_assert_msg(running == 0,
-						  "more than 1 running task");
+						   "more than 1 running task");
 				running = 1;
 				break;
 			default:
@@ -334,11 +337,14 @@ void get_tsk_stats(tsk_stats_t *stats) {
 	stats->free = 0;
 	stats->parked = 0;
 	stats->runnable = 0;
+	stats->iowait = 0;
 	stats->arenas = 0;
 	switch (runq.t0.status) {
 	default:
 		panic("bad t0 status");
 	case STATUS_IOWAIT:
+		stats->iowait++;
+		break;
 	case STATUS_PARKED:
 		stats->parked++;
 		break;
@@ -352,6 +358,11 @@ void get_tsk_stats(tsk_stats_t *stats) {
 	add_stats_from(theap.full, stats);
 	add_stats_from(theap.partial, stats);
 	add_stats_from(theap.empty, stats);
+
+	runtime_assert_msg(stats->parked == runq.parked,
+			   "bad bookkeeping on parked tasks");
+	runtime_assert_msg(stats->iowait == runq.iowait,
+			   "bad bookkeeping on i/o tasks");
 }
 
 static task_t *list_pop(tasklist_t *tl) {
@@ -398,6 +409,7 @@ static task_t *find_work(int must) {
 			/* now we've proven we need to allocate */
 			work = task_handoff(new_task());
 		} else if (must) {
+			runtime_assert_msg(runq.iowait, "deadlock");
 		        poll(-1); /* TODO: timers */
 			work = list_pop(&runq.queue);
 			runtime_assert_msg(work, "deadlock");
@@ -474,7 +486,7 @@ static void unpark(task_t *task) {
 static void io_unpark(task_t *task) {
 	runtime_assert_msg(task->status == STATUS_IOWAIT,
 			   "unpark of unparked task");
-	--runq.parked;
+	--runq.iowait;
 	ready(task);
 }
 
@@ -517,7 +529,7 @@ static void _sbrt_exit(void) {
 	/* free/clear old task state */
 	task_t *old = runq.running;
 	runtime_assert_msg(old->status == STATUS_RUNNING,
-			  "runq.running is not running");
+			   "runq.running is not running");
 	old->status = STATUS_EMPTY;
 	old->start = NULL;
 	old->udata = NULL;
@@ -531,8 +543,6 @@ static void _sbrt_exit(void) {
 	}
 	run(target);
 }
-
-static inline uintptr_t stack_magic(task_t *);
 
 /*
   Create a new runnable task.
@@ -564,10 +574,10 @@ void spawn(void (*start)(void*), void *data) {
 	return;
 }
 
-static void park_and_wait(task_t **addr) {
+static void park_and_iowait(task_t **addr) {
 	*addr = runq.running;
 	runq.running->status = STATUS_IOWAIT;
-	++runq.parked;
+	++runq.iowait;
 	swtch(find_work(1));
 	*addr = NULL;
 	return;
@@ -580,7 +590,7 @@ try:
 	if ((amt == -1) && (errno == EAGAIN)) {
 		runtime_assert_msg(ctx->writer == NULL,
 				   "multiple writers on an ioctx");
-		park_and_wait(&ctx->writer);
+		park_and_iowait(&ctx->writer);
 		goto try;
 	}
 	return amt;
@@ -593,7 +603,7 @@ try:
 	if ((amt == -1) && (errno == EAGAIN)) {
 		runtime_assert_msg(ctx->reader == NULL,
 				   "multiple readers on an ioctx");
-		park_and_wait(&ctx->reader);
+		park_and_iowait(&ctx->reader);
 		goto try;
 	}
 	return amt;

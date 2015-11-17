@@ -70,11 +70,10 @@ int main(void) {
 	puts("running pipe tests...");
 
 	int pipefd[2];
-	int ok;
 #ifdef __gnu_linux__
-	please(ok = pipe2(pipefd, O_NONBLOCK|O_CLOEXEC));
+	please(pipe2(pipefd, O_NONBLOCK|O_CLOEXEC));
 #else
-	please(ok = pipe(pipefd));
+	please(pipe(pipefd));
 	fcntl(pipefd[0], F_SETFL, O_NONBLOCK|(fcntl(pipefd[0], F_GETFL)));
 	fcntl(pipefd[1], F_SETFL, O_NONBLOCK|(fcntl(pipefd[1], F_GETFL)));
 #endif
