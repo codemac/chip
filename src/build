@@ -10,12 +10,18 @@ target = `{gcc -v |[2] grep Target}
 CC = gcc
 
 # detect host arch
-if (echo $target | grep -q x86_64) ARCH = amd64
-if (echo $target | grep -q armv7) ARCH = arm
+if (echo $target | grep -q x86_64) {
+    ARCH = amd64
+} else if (echo $target | grep -q armv7) {
+    ARCH = arm
+} else echo 'Unsupported Arch' && exit 1
 
 # detect host OS
-if (echo $target | grep -q linux) POLLER = epoll
-if (echo $target | grep -q 'bsd\|darwin') POLLER = kqueue
+if (echo $target | grep -q linux) {
+    POLLER = epoll
+} else if (echo $target | grep -q 'bsd\|darwin') { 
+    POLLER = kqueue
+} else echo 'Unsupported OS' && exit 1
 
 CFLAGS = '-O3 -g -Wall -Werror'
 
