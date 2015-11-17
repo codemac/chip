@@ -32,16 +32,15 @@ if (test `{ whatis musl-gcc}) {
 
 mkdir -p bin
 
-fn build_tests { for (test in $tests) make bin/$test.test }
-
-fn build_benchs { for (bench in $benchs) make bin/$bench.bench }
+# compilation of test and benchmark binaries
+# is done in parallel.
+fn build_tests { make -j bin/^$tests.test }
+fn build_benchs { make -j bin/$benchs.bench }
 
 fn test { build_tests; for (test in `{ls ./bin/*.test}) ./$test; echo 'PASS' }
-
 fn bench { build_benchs; for (bench in `{ls ./bin/*.bench}) ./$bench }
 
 fn install { make install }
-
 fn uninstall { make uninstall }
 
 $*
