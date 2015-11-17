@@ -478,7 +478,7 @@ static void ready(task_t *task) {
 
 static void unpark(task_t *task) {
 	runtime_assert_msg(task->status == STATUS_PARKED,
-			  "unpark of unparked task");
+			   "unpark of unparked task");
 	--runq.parked;
 	ready(task);
 }
@@ -518,6 +518,7 @@ __attribute__((noreturn))
 static void run(task_t *task) {
 	runtime_assert_msg(task->status == STATUS_RUNNABLE,
 			  "run() called on unrunnable task");
+	smashing_check(task);
 	runq.running = task;
 	task->status = STATUS_RUNNING;
 	_loadctx(&task->ctx);

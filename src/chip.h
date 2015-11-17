@@ -8,7 +8,7 @@
  */
 typedef struct {
 	tasklist_t list;
-	int count;
+	int        count;
 } sema_t;
 
 /* 
@@ -37,7 +37,7 @@ void post(sema_t *sema) {
 
 typedef struct {
 	tasklist_t waiting;
-	int locked;
+	int        locked;
 } mutex_t;
 
 void lock(mutex_t *mutex) {
