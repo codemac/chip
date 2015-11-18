@@ -63,15 +63,9 @@ typedef struct {
 } regctx_t;
 
 /* ABI-specific register/stack setup. Unavoidably hairy. */
-static inline void setup(regctx_t *ctx, word_t stack, 
-			 word_t retpc, uintptr_t magic) {
-	/* push magic bytes onto the stack */
-	stack.val -= sizeof(uintptr_t);
-	*(uintptr_t *)stack.ptr = magic;
-
-	/* most ABIs expect 2-word aligned call frames */
-	stack.val -= sizeof(uintptr_t);
-
+static inline void setup(regctx_t *ctx, word_t stack, word_t retpc) {
+	/*  the top word is magic, and most ABIs require two-word alignment */
+	stack.val -= 2*sizeof(uintptr_t);
 #ifdef __x86_64__
 	ctx->rsp = stack;
 	*(uintptr_t *)stack.ptr = retpc.val;
@@ -203,8 +197,22 @@ static int arena_is_empty(arena_t *arena) {
 	return (arena->bits == ((uintptr_t)0));
 }
 
+/*
+	Each stack/task has a magic number that occupies
+	the top word. If we find a stack without this, then
+	a badly-behaved program clobbered it.
+ */
+static inline uintptr_t stack_magic(task_t *task) {
+	return ((uintptr_t)task) ^ (((uintptr_t)task->stack)>>12);
+}
+
+static inline void push_magic(task_t *task) {
+	uintptr_t magic = stack_magic(task);
+	*(uintptr_t *)(task->stack - sizeof(uintptr_t)) = magic;
+}
+
 static task_t *new_task(void) {
-	task_t *out = NULL;
+	task_t *out;
 	
 	if (theap.partial) {
 		out = arena_get_task(theap.partial);
@@ -246,7 +254,9 @@ static task_t *new_task(void) {
 		out = arena_get_task(moving);
 		runtime_assert_msg(out, "failed alloc from empty arena");
 	}
-	
+
+	/* may as well pre-fault the stack now */
+	push_magic(out);
 	return out;
 }
 
@@ -418,15 +428,6 @@ static task_t *find_work(int must) {
 	return work;
 }
 
-/*
-	Each stack/task has a magic number that occupies
-	the top word. If we find a stack without this, then
-	a badly-behaved program clobbered it.
- */
-static inline uintptr_t stack_magic(task_t *task) {
-	return ((uintptr_t)task) ^ (((uintptr_t)task->stack)>>12);
-}
-
 static inline void smashing_check(task_t *task) {
 	uintptr_t magic = *(uintptr_t *)(task->stack - sizeof(uintptr_t));
 	runtime_assert_msg(magic == stack_magic(task),
@@ -570,7 +571,7 @@ void spawn(void (*start)(void*), void *data) {
 	t->start = start;
 	stack.ptr = t->stack;
 	retpc.ptr = _sbrt_entry;
-	setup(&t->ctx, stack, retpc, stack_magic(t));
+	setup(&t->ctx, stack, retpc);
 	ready(t);
 	return;
 }
