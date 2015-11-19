@@ -32,7 +32,7 @@ static void  __panicstr(const char *msg, size_t len) {
 
 /* for type-punning register values */
 typedef union {
-	void *ptr;
+	void      *ptr;
 	uintptr_t val;
 } word_t;
 
@@ -59,6 +59,8 @@ typedef struct {
 	word_t r12;
 	word_t r13;
 	word_t r14;
+#else
+#error "unsupported arch"
 #endif
 } regctx_t;
 
@@ -152,12 +154,38 @@ static arena_t *map_arena(void) {
 	return out;
 }
 
-static void unmap_arena(arena_t *arena) {
+/*
+  Rather than un-mapping the memory, we can tell the
+  kernel that the memory no longer needs to remain
+  valid (e.g. it can be unmapped and then zero-filled
+  if it is faulted back in.)
+ */
+static void soft_offline_arnea(arena_t *arena) {
 	void *top = arena;
 	void *base = top - ARENA_STACK_MAPPING;
-	munmap(base, ARENA_MAPPING);
+	int flags;
+
+	/*
+	  MADV_FREE on BSD has more-or-less the same
+	  semantics as MADV_DONTNEED on linux (for 
+	  private anonymous mappings.) It's fine if the
+	  kernel zero-fills these pages.
+	 */
+#ifdef MADV_FREE
+	flags = MADV_FREE;
+#else
+	flags = MADV_DONTNEED;
+#endif
+
+	/* 
+	   We only offline the stack pages; we keep the
+	   arena page(s) because they contain the pointers
+	   necessary to traverse the heap (we can't zero-fill them.)
+	 */
+	madvise(base, ARENA_STACK_MAPPING, flags);
 }
 
+/* get task or abort */
 static task_t *arena_get_task(arena_t *arena) {
 	uintptr_t v = ~(arena->bits);
 	runtime_assert_msg(v, "alloc from full arena");
@@ -216,9 +244,6 @@ static task_t *new_task(void) {
 	
 	if (theap.partial) {
 		out = arena_get_task(theap.partial);
-		runtime_assert_msg(out,
-				  "failed alloc from partially-full arena");
-
 		if (arena_is_full(theap.partial)) {
 			arena_t *moving = theap.partial;
 			theap.partial = moving->next;
@@ -237,7 +262,8 @@ static task_t *new_task(void) {
 		arena_t *moving;
 		if (theap.empty) {
 			moving = theap.empty;
-			theap.empty = NULL;
+			theap.empty = moving->next;
+			theap.empty->prev = NULL;
 		} else {
 			moving = map_arena();
 			if (moving == NULL)
@@ -252,10 +278,9 @@ static task_t *new_task(void) {
 
 		theap.partial = moving;
 		out = arena_get_task(moving);
-		runtime_assert_msg(out, "failed alloc from empty arena");
 	}
 
-	/* may as well pre-fault the stack now */
+	/* may as well fault the stack now */
 	push_magic(out);
 	return out;
 }
@@ -294,18 +319,17 @@ static void free_task(task_t *task) {
 
 		theap.partial = arena;
 	} else if (arena_is_empty(arena)) {
-		/*
-		  TODO: right now we release any extra
-		  empty arenas, but we may want to preserve
-		  more than one (or maybe remap the arenas
-		  to make one larger one...?)
-		 */
 		arena_unlink(&theap.partial, arena);
 		arena_t *old = theap.empty;
 		theap.empty = arena;
 	        if (old) {
-			unmap_arena(old);
-			theap.alloc -= ARENA_TASKS;
+			/* 
+			   We only keep one 'empty'
+			   arena that isn't soft-offlined.
+			*/
+			theap.empty->next = old;
+			old->prev = theap.empty;
+			soft_offline_arnea(old);
 		}
 	}
 }
