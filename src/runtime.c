@@ -238,9 +238,9 @@ static int arena_is_empty(arena_t *arena) {
 }
 
 /*
-	Each stack/task has a magic number that occupies
-	the top word. If we find a stack without this, then
-	a badly-behaved program clobbered it.
+  Each stack/task has a magic number that occupies
+  the top word. If we find a stack without this, then
+  a badly-behaved program clobbered it.
  */
 static inline uintptr_t stack_magic(task_t *task) {
 	return ((uintptr_t)task) ^ (((uintptr_t)task->stack)>>12);
@@ -352,7 +352,6 @@ static void _sbrt_exit(void);
 static void add_stats_from(arena_t *arena, tsk_stats_t *stats) {
 	int running = 0;
 	for (arena_t *a = arena; a != NULL; a = a->next) {
-		stats->arenas++;
 		for (int i=0; i<ARENA_TASKS; ++i) {
 			switch (a->tasks[i].status) {
 			case STATUS_EMPTY:
@@ -384,7 +383,6 @@ void get_tsk_stats(tsk_stats_t *stats) {
 	stats->parked = 0;
 	stats->runnable = 0;
 	stats->iowait = 0;
-	stats->arenas = 0;
 	switch (runq.t0.status) {
 	default:
 		panic("bad t0 status");
@@ -653,10 +651,10 @@ void chip_init(void) {
 	runq.t0.status = STATUS_RUNNING;
 	runq.running = &runq.t0;
 
-	/*
-		t0 has a fake top-of-stack pointer
-		in order to make the stack-smashing 
-		detector happy.
+	/* 
+	   t0 has a fake top-of-stack pointer
+	   in order to make the stack-smashing 
+	   detector happy.
 	 */
 	runq.t0.stack = ((void *)(&runq.t0_magic)) + sizeof(uintptr_t);
 	runq.t0_magic = stack_magic(&runq.t0);

@@ -39,7 +39,7 @@ int main(void) {
 
 	tsk_stats_t stats;
 	get_tsk_stats(&stats);
-	printf("after %d spawns, %d parked, %d free, %d runnable; %d arenas\n", INCS, stats.parked, stats.free, stats.runnable, stats.arenas);
+	printf("after %d spawns, %d parked, %d free, %d queued\n", INCS, stats.parked, stats.free, stats.runnable);
 
 	/* there should be INCS many pending tasks */
 	assert(stats.parked+stats.runnable == INCS);
@@ -53,7 +53,7 @@ int main(void) {
 	assert(stats.runnable == 0);
 	assert(stats.parked == 0);
 
-	printf("after unlock, %d parked, %d free, %d runnable; %d arenas\n", stats.parked, stats.free, stats.runnable, stats.arenas);
+	printf("after unlock, %d parked, %d free, %d queued\n", stats.parked, stats.free, stats.runnable);
 	
 	assert(sema.count == 0);
 	assert(count == INCS);

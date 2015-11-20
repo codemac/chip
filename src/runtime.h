@@ -25,7 +25,6 @@ typedef struct {
 	int parked;   /* number of parked tasks */
 	int iowait;   /* number of tasks waiting for i/o */
 	int free;     /* number of free (unused) tasks */
-	int arenas;   /* number of task arenas currently mapped */
 } tsk_stats_t;
 
 /*
