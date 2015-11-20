@@ -152,7 +152,7 @@ struct arena_s {
 static arena_t *map_arena(void) {
 	void *mem = mmap(NULL, ARENA_MAPPING, PROT_READ|PROT_WRITE,
 			 MAP_PRIVATE|MAP_ANON, -1, 0);
-	if (mem == MAP_FAILED)
+	if (unlikely(mem == MAP_FAILED))
 		return NULL;
 	
 	arena_t *out = (arena_t *)(mem + ARENA_STACK_MAPPING);
@@ -172,7 +172,7 @@ static arena_t *map_arena(void) {
   valid (e.g. it can be unmapped and then zero-filled
   if it is faulted back in.)
  */
-static void soft_offline_arnea(arena_t *arena) {
+static void soft_offline_arena(arena_t *arena) {
 	void *top = arena;
 	void *base = top - ARENA_STACK_MAPPING;
 	int flags;
@@ -341,7 +341,7 @@ static void free_task(task_t *task) {
 			*/
 			theap.empty->next = old;
 			old->prev = theap.empty;
-			soft_offline_arnea(old);
+			soft_offline_arena(old);
 		}
 	}
 }
