@@ -4,12 +4,24 @@
 #include <signal.h>
 #include <limits.h>
 
-#ifdef __gnu_linux__
+/* 
+	For now, just linux and BSD,
+	and linux is easier to detect,
+	so just try to use kqueue if linux
+	isn't defined.
+
+	The poller defines:
+	void poll(int ms);
+	void pollinit(void);
+
+	And from runtime.h:
+	int ioctx_init(int fd, ioctx_t *ctx);
+	int ioctx_destroy(ioctx_t *ctx);
+*/
+#ifdef __linux__
 #include "runtime_epoll.h"
-#elif __APPLE__
-#include "runtime_kqueue.h"
 #else
-#error "unsupported OS"
+#include "runtime_kqueue.h"
 #endif
 
 /* run-of-the-mill gcc grossness */

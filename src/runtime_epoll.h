@@ -8,7 +8,7 @@ static void io_unpark(task_t *t);
 
 static int epfd;
 
-static struct epoll_event events[64];
+static struct epoll_event events[128];
 
 void pollinit(void) {
 	epfd = epoll_create1(EPOLL_CLOEXEC);
@@ -40,7 +40,7 @@ int ioctx_destroy(ioctx_t *ctx) {
 static void poll(int ms) {
 	int nev;
 entry:
-       	nev = epoll_wait(epfd, &events[0], 64, ms);
+	nev = epoll_wait(epfd, &events[0], 64, ms);
 	if (nev == -1) {
 		switch (errno) {
 		case EINTR:
@@ -51,15 +51,28 @@ entry:
 		}
 	}
 	
+	int woke = 0;
 	for (int i=0; i<nev; ++i) {
 		struct epoll_event *ev = &events[i];
 		ioctx_t *ctx = (ioctx_t *)ev->data.ptr;
 
-		if (ctx->reader && (ev->events&(EPOLLIN|EPOLLERR|EPOLLRDHUP|EPOLLHUP)))
+		if (ctx->reader && (ev->events&(EPOLLIN|EPOLLERR|EPOLLRDHUP|EPOLLHUP))) {
 			io_unpark(ctx->reader);
+			woke++;
+		}
 		
-		if (ctx->writer && (ev->events&(EPOLLOUT|EPOLLERR)))
+		if (ctx->writer && (ev->events&(EPOLLOUT|EPOLLERR))) {
 			io_unpark(ctx->writer);
-		
+			woke++;
+		}
 	}
+	/*
+		We have to handle the case in which the
+		user has initialized some (perhaps many)
+		different fds, but is not waiting on many 
+		of them, and has nonetheless managed to park
+		all of the tasks.
+	 */
+	if (woke == 0 && ms == -1)
+		goto entry;
 }

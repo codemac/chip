@@ -8,7 +8,7 @@ static void io_unpark(task_t *t);
 
 static int kqfd;
 
-static struct kevent events[64];
+static struct kevent events[128];
 
 static void pollinit(void) {
 	kqfd = kqueue();
@@ -18,7 +18,7 @@ static void pollinit(void) {
 	}
 }
 
-static void handle_events(int off, int num);
+static int handle_events(int off, int num);
 
 int ioctx_init(int fd, ioctx_t *ctx) {
 	events[0].ident = fd;
@@ -69,22 +69,29 @@ kevent_wait:
 			_exit(1);
 		}
 	}
-	handle_events(0, nev);
+	if (handle_events(0, nev) == 0 && ms == -1)
+		goto kevent_wait;
 }
 
-static void handle_events(int off, int num) {
+static int handle_events(int off, int num) {
+	int woke = 0;
 	for (int i=off; i<num; ++i) {
 		struct kevent *ev = &events[i];
 		ioctx_t *ctx = (ioctx_t *)ev->udata;
 		switch (ev->filter) {
 		case EVFILT_WRITE:
-			if (ctx->writer) 
+			if (ctx->writer) {
 				io_unpark(ctx->writer);
+				++woke;
+			}
 			break;
 		case EVFILT_READ:
-			if (ctx->reader) 
+			if (ctx->reader) {
 				io_unpark(ctx->reader);
+				++woke;
+			}
 			break;
 		}
 	}
+	return woke;
 }
