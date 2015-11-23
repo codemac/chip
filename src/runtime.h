@@ -4,20 +4,11 @@
 #include <sys/types.h>
 
 /* 
-	Some notes on task scheduling:
-	Tasks are FIFO-scheduled, so calls to spawn()
-	put tasks at the end of the list of runnable
-	tasks. Similarly, a call to sched() puts the
-	currently-running task at the end of the 
-	list.
- */
-
-/* 
  * spawn() a new coroutine
  */
 void spawn(void (start)(void*), void *data);
 
-/* yield to the scheduler */
+/* yield to the scheduler; may return immediately */
 void sched(void);
 
 typedef struct {
@@ -40,7 +31,7 @@ void get_tsk_stats(tsk_stats_t *);
  * The following primitives can be used
  * to build higher-level synchronization 
  * abstractions like mutexes and semaphores.
-*/
+ */
 
 /* task_t is an opaque type representing a task */
 typedef struct task_s task_t;
@@ -136,9 +127,22 @@ ssize_t ioctx_write(ioctx_t *ctx, char *buf, size_t bytes);
  * says the fd is readable.
  *
  * Two tasks trying to perform reads on the same
- * fd at the same time will have undefine behavior,
+ * fd at the same time will have undefined behavior,
  * but may abort the program if the runtime notices.
  */
 ssize_t ioctx_read(ioctx_t *ctx, char *buf, size_t bytes);
+
+/*
+ * ioctx_cancel() causes any tasks blocked on I/O on the
+ * given ioctx to be woken up with errno set to ECANCELED.
+ * The call does not return until the blocked tasks have
+ * had an opportunity to run.
+ *
+ * The purpose of this call is to create a happens-before 
+ * relationship between the processing of ECANCELED and 
+ * the destruction of a ctx (due to ioctx_destroy() and/or
+ * free-ing of the memory, if it was heap-allocated.)
+ */
+void ioctx_cancel(ioctx_t *ctx);
 
 #endif /* __CHIP_RUNTIME_H_ */
