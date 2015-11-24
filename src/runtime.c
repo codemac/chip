@@ -528,9 +528,12 @@ static void io_unpark(task_t *task) {
 
 /* schedule the target task *immediately* with i/o cancellation */
 static void io_cancel_now(task_t *task) {
+	runtime_assert_msg(task->status == STATUS_IOWAIT,
+			   "io cancelation of task not in iowait");
+
 	task->next = MAP_FAILED;
 	task->status = STATUS_RUNNABLE;
-	--runq.parked;
+	--runq.iowait;
 	ready(runq.running); /* set currently-running task as runnable */
 	swtch(task);
 }
@@ -622,6 +625,7 @@ static int park_and_iowait(task_t **addr) {
 
 	/* async wakeup due to cancelation */
 	if (unlikely(runq.running->next == MAP_FAILED)) {
+		runq.running->next = NULL;
 		errno = ECANCELED;
 		return -1;
 	}
