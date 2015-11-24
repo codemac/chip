@@ -634,17 +634,12 @@ static int park_and_iowait(task_t **addr) {
 }
 
 void ioctx_cancel(ioctx_t *ctx) {
-	task_t *tmp;
-	if (ctx->writer) {
-		tmp = ctx->writer;
-		ctx->writer = NULL;
-		io_cancel_now(tmp);
-	}
-	if (ctx->reader) {
-		tmp = ctx->reader;
-		ctx->reader = NULL;
-		io_cancel_now(tmp);
-	}
+	if (ctx->writer)
+		io_cancel_now(ctx->writer);
+	
+	if (ctx->reader)
+		io_cancel_now(ctx->reader);
+	
 }
 
 ssize_t ioctx_write(ioctx_t *ctx, char *buf, size_t bytes) {

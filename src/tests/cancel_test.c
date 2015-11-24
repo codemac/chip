@@ -61,7 +61,7 @@ void pipe_reader(void *data) {
 	ssize_t this;
 	ssize_t amt = 0;
 	
-	spawn(pipe_canceler, data);
+	spawn(pipe_canceler, ctx);
 
 	
 	for (;;) {
