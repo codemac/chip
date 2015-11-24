@@ -61,6 +61,7 @@ typedef struct {
 	word_t r15;
 	word_t rsp;
 #elif __arm__
+	word_t r4;
 	word_t r5;
 	word_t r6;
 	word_t r7;
