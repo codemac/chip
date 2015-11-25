@@ -643,6 +643,10 @@ void ioctx_cancel(ioctx_t *ctx) {
 }
 
 ssize_t ioctx_write(ioctx_t *ctx, char *buf, size_t bytes) {
+	if (unlikely(ctx->fd == -1)) {
+		errno = ECANCELED;
+		return -1;
+	}
 	ssize_t amt;
 try:
 	amt = write(ctx->fd, buf, bytes);
@@ -650,8 +654,9 @@ try:
 		runtime_assert_msg(ctx->writer == NULL,
 				   "multiple writers on an ioctx");
 
-		if (park_and_iowait(&ctx->writer) < 0)
+		if (park_and_iowait(&ctx->writer) < 0) {
 			return -1;
+		}
 		
 		goto try;
 	}

@@ -93,7 +93,10 @@ int ioctx_init(int fd, ioctx_t *ctx);
  * ioctx_t and closes the associated file
  * descriptor. On success, 0 is returned.
  * On error, -1 is returned, and errno
- * will be set.
+ * will be set. Additionally, on success,
+ * ctx->fd will be -1, and any tasks parked
+ * on this ioctx will be unparked with 
+ * errno set to ECANCELED (see ioctx_cancel()).
  */
 int ioctx_destroy(ioctx_t *ctx);
 
@@ -136,12 +139,11 @@ ssize_t ioctx_read(ioctx_t *ctx, char *buf, size_t bytes);
  * ioctx_cancel() causes any tasks blocked on I/O on the
  * given ioctx to be woken up with errno set to ECANCELED.
  * The call does not return until the blocked tasks have
- * had an opportunity to run.
+ * had an opportunity to run. Note that the file descriptor 
+ * is not closed, and tasks may immediately re-park themselves
+ * on the fd. To permanently invalidate the ioctx, use 
+ * ioctx_destroy().
  *
- * The purpose of this call is to create a happens-before 
- * relationship between the processing of ECANCELED and 
- * the destruction of a ctx (due to ioctx_destroy() and/or
- * free-ing of the memory, if it was heap-allocated.)
  */
 void ioctx_cancel(ioctx_t *ctx);
 
