@@ -42,12 +42,6 @@ static void  __panicstr(const char *msg, size_t len) {
 	_exit(1); /* we probably won't get here. */
 }
 
-/* for type-punning register values */
-typedef union {
-	void      *ptr;
-	uintptr_t val;
-} word_t;
-
 typedef struct {
 /* N.B. keep in sync with context_{arch}.s  */
 #ifdef __x86_64__
@@ -111,8 +105,8 @@ struct task_s {
 	int        status; /* STATUS_XXX */
 	int        index;  /* index in arena */
 	regctx_t   ctx;    /* saved register state, if not running */
-	void       (*start)(void*); 
-	void       *udata; /* passed to task->start() */
+	void       (*start)(word_t); 
+	word_t     udata; /* passed to task->start() */
 	void       *stack;
 	arena_t    *arena;
 };
@@ -471,8 +465,15 @@ static inline void smashing_check(task_t *task) {
 
 /* to de-schedule, set runq.running->status, then call swtch(find_work(1)) */
 static void swtch(task_t *next) {
-	runtime_assert_msg(next != runq.running,
-			  "tried to schedule onto self");
+	/*
+	 * unlikely but possible: the task that runs the poller
+	 * is the first one to be available.
+	 */
+	if (unlikely(next == runq.running)) {
+		runq.running->status = STATUS_RUNNING;
+		return;
+	}
+	
 	runtime_assert_msg(next->status == STATUS_RUNNABLE,
 			  "tried to schedule unrunnable task");
 
@@ -569,7 +570,7 @@ static void _sbrt_exit(void) {
 			   "runq.running is not running");
 	old->status = STATUS_EMPTY;
 	old->start = NULL;
-	old->udata = NULL;
+	old->udata.ptr = NULL;
 
 	task_t *target;
 	if (runq.begin.top) {
@@ -588,7 +589,7 @@ static void _sbrt_exit(void) {
   of new tasks are put into a lower-priority queue
   than other runnable tasks.)
  */
-void spawn(void (*start)(void*), void *data) {
+void spawn(void (*start)(word_t), word_t data) {
 	task_t *t;
 	word_t stack;
 	word_t retpc;
@@ -618,6 +619,27 @@ static void park_and_iowait(task_t **addr) {
 	swtch(find_work(1));
 	*addr = NULL;
 	return;
+}
+
+int ioctx_accept(ioctx_t *ctx, struct sockaddr *addr, socklen_t *addrlen) {
+	int res;
+try:
+#ifdef __linux__
+	res = accept4(ctx->fd, addr, addrlen, SOCK_CLOEXEC|SOCK_NONBLOCK);
+#else
+	res = accept(ctx->fd, addr, addrlen);
+#endif
+	if (res == -1 && errno == EAGAIN) {
+		runtime_assert_msg(ctx->reader == NULL, "concurrent calls to accept()");
+		park_and_iowait(&ctx->reader);
+		goto try;
+	}
+#ifndef __linux__
+	if (res > 0) {
+		fcntl(res, F_SETFL, O_CLOEXEC|O_NONBLOCK|(fcntl(res, F_GETFL)));
+	}
+#endif
+	return res;
 }
 
 ssize_t ioctx_write(ioctx_t *ctx, char *buf, size_t bytes) {

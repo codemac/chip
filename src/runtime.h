@@ -2,6 +2,7 @@
 #define __CHIP_RUNTIME_H_
 #include <stddef.h>
 #include <sys/types.h>
+#include <sys/socket.h>
 
 /* 
 	Some notes on task scheduling:
@@ -12,10 +13,17 @@
 	list.
  */
 
+/* for type-punning register values */
+typedef union {
+	void      *ptr;
+	uintptr_t val;
+	int       fd;
+} word_t;
+
 /* 
  * spawn() a new coroutine
  */
-void spawn(void (start)(void*), void *data);
+void spawn(void (start)(word_t), word_t data);
 
 /* yield to the scheduler */
 void sched(void);
@@ -140,5 +148,16 @@ ssize_t ioctx_write(ioctx_t *ctx, char *buf, size_t bytes);
  * but may abort the program if the runtime notices.
  */
 ssize_t ioctx_read(ioctx_t *ctx, char *buf, size_t bytes);
+
+/*
+ * ioctx_accept() is analagous to
+ *
+ *    accept4(ctx->fd, addr, addrlen, SOCK_NONBLOCK|SOCK_CLOEXEC);
+ *
+ * except that the scheduler will be invoked when EAGAIN is returned.
+ * (On platforms that don't support accept4(), the returned file descriptor's
+ * flags will be manipulated directly.)
+ */
+int ioctx_accept(ioctx_t *ctx, struct sockaddr *addr, socklen_t *addrlen);
 
 #endif /* __CHIP_RUNTIME_H_ */

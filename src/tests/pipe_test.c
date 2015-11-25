@@ -16,10 +16,10 @@ static char read_buf[4096];
 
 #define NUM_BYTES (1<<22)
 
-void pipe_writer(void *data) {
+void pipe_writer(word_t data) {
 	ioctx_t ctx;
 	tsk_stats_t stats;
-	int wfd = ((int *)data)[1];
+	int wfd = ((int *)data.ptr)[1];
 	ssize_t amt = 0;
 	ssize_t this;
 	ssize_t w;
@@ -40,12 +40,12 @@ void pipe_writer(void *data) {
 	return;
 }
 
-void pipe_reader(void *data) {
+void pipe_reader(word_t data) {
 	ioctx_t ctx;
 	tsk_stats_t stats;
 	ssize_t this;
 	ssize_t amt = 0;
-	int rfd = ((int *)data)[0];
+	int rfd = ((int *)data.ptr)[0];
 	
 	please(ioctx_init(rfd, &ctx));
 	
@@ -70,6 +70,8 @@ int main(void) {
 	puts("running pipe tests...");
 
 	int pipefd[2];
+	word_t arg0;
+	arg0.ptr = pipefd;
 #ifdef __gnu_linux__
 	please(pipe2(pipefd, O_NONBLOCK|O_CLOEXEC));
 #else
@@ -78,8 +80,8 @@ int main(void) {
 	fcntl(pipefd[1], F_SETFL, O_NONBLOCK|(fcntl(pipefd[1], F_GETFL)));
 #endif
 
-	spawn(pipe_writer, pipefd);
-	spawn(pipe_reader, pipefd);
+	spawn(pipe_writer, arg0);
+	spawn(pipe_reader, arg0);
 
 	park(&rdsema); /* wait for reads to complete */
 	puts(__FILE__ " passed.");

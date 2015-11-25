@@ -16,7 +16,7 @@ static int count;
 static sema_t sema;   /* 'done' semaphore */
 static mutex_t ilock; /* lock to force many tasks to exist */
 
-static void inc(void *data) {
+static void inc(word_t data) {
 	lock(&ilock);
 	if (++count == INCS) {
 		post(&sema);
@@ -28,13 +28,15 @@ static void inc(void *data) {
 int main(void) {
 	puts("running "__FILE__);
 	lock(&ilock);
-
+	word_t zero;
+	zero.val = 0;
+	
         /* 
 	   with the lock held, start a bunch of tasks 
 	   that contend on the lock.
 	 */
 	for (int i=0; i<INCS; ++i) {
-		spawn(inc, NULL);
+		spawn(inc, zero);
 	}
 
 	tsk_stats_t stats;
