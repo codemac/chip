@@ -22,6 +22,7 @@
 #include "runtime_epoll.h"
 #else
 #include "runtime_kqueue.h"
+#include <fcntl.h>
 #endif
 
 /* run-of-the-mill gcc grossness */

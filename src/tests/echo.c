@@ -1,10 +1,13 @@
-#include "chip/chip.h"
 #include <stdio.h>
 #include <string.h>
 #include <errno.h>
 #include <unistd.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
+#ifndef __linux__
+#include <fcntl.h>
+#endif
+#include "chip/chip.h"
 
 #define please(expr) if ((expr) == -1) { perror(#expr); _exit(1); }
 
@@ -52,7 +55,13 @@ int main(void) {
 	ioctx_t lctx;
 	struct sockaddr addr;
 	socklen_t addrlen;
+
+#ifdef __linux__
 	please(lfd = socket(AF_INET, SOCK_STREAM|SOCK_NONBLOCK|SOCK_CLOEXEC, 0));
+#else
+	please(lfd = socket(AF_INET, SOCK_STREAM, 0));
+	fcntl(lfd, F_SETFL, O_NONBLOCK|O_CLOEXEC|fcntl(lfd, F_GETFL));
+#endif
 
 	struct sockaddr_in laddr;
 	memset(&laddr, 0, sizeof(laddr));
