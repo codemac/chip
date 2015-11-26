@@ -13,7 +13,7 @@
 static int count;
 static sema_t sema;
 
-static void inc(void *data) {
+static void inc(word_t ignored) {
 	if (++count == INCS) {
 		post(&sema);
 	}
@@ -25,8 +25,10 @@ int main(void) {
 	
 	/* spawn tasks that run 'inc' */
 	clock_t t = clock();
+	word_t zero;
+	zero.ptr = NULL;
 	for (int i=0; i<INCS; ++i) {
-		spawn(inc, NULL);
+		spawn(inc, zero);
 	}
 	park(&sema);
 	t = clock() - t;

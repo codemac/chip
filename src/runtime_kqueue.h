@@ -45,7 +45,12 @@ int ioctx_init(int fd, ioctx_t *ctx) {
 }
 
 int ioctx_destroy(ioctx_t *ctx) {
-	return close(ctx->fd);
+	if (close(ctx->fd) == -1)
+		return -1;
+
+	ctx->fd = -1;
+	ioctx_cancel(ctx);
+	return 0;
 }
 
 static void poll(int ms) {

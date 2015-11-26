@@ -4,15 +4,6 @@
 #include <sys/types.h>
 #include <sys/socket.h>
 
-/* 
-	Some notes on task scheduling:
-	Tasks are FIFO-scheduled, so calls to spawn()
-	put tasks at the end of the list of runnable
-	tasks. Similarly, a call to sched() puts the
-	currently-running task at the end of the 
-	list.
- */
-
 /* for type-punning register values */
 typedef union {
 	void      *ptr;
@@ -20,12 +11,12 @@ typedef union {
 	int       fd;
 } word_t;
 
-/* 
+/*
  * spawn() a new coroutine
  */
 void spawn(void (start)(word_t), word_t data);
 
-/* yield to the scheduler */
+/* yield to the scheduler; may return immediately */
 void sched(void);
 
 typedef struct {
@@ -48,7 +39,7 @@ void get_tsk_stats(tsk_stats_t *);
  * The following primitives can be used
  * to build higher-level synchronization 
  * abstractions like mutexes and semaphores.
-*/
+ */
 
 /* task_t is an opaque type representing a task */
 typedef struct task_s task_t;
@@ -110,7 +101,10 @@ int ioctx_init(int fd, ioctx_t *ctx);
  * ioctx_t and closes the associated file
  * descriptor. On success, 0 is returned.
  * On error, -1 is returned, and errno
- * will be set.
+ * will be set. Additionally, on success,
+ * ctx->fd will be -1, and any tasks parked
+ * on this ioctx will be unparked with 
+ * errno set to ECANCELED (see ioctx_cancel()).
  */
 int ioctx_destroy(ioctx_t *ctx);
 
@@ -144,7 +138,7 @@ ssize_t ioctx_write(ioctx_t *ctx, char *buf, size_t bytes);
  * says the fd is readable.
  *
  * Two tasks trying to perform reads on the same
- * fd at the same time will have undefine behavior,
+ * fd at the same time will have undefined behavior,
  * but may abort the program if the runtime notices.
  */
 ssize_t ioctx_read(ioctx_t *ctx, char *buf, size_t bytes);
@@ -159,5 +153,17 @@ ssize_t ioctx_read(ioctx_t *ctx, char *buf, size_t bytes);
  * flags will be manipulated directly.)
  */
 int ioctx_accept(ioctx_t *ctx, struct sockaddr *addr, socklen_t *addrlen);
+
+/*
+ * ioctx_cancel() causes any tasks blocked on I/O on the
+ * given ioctx to be woken up with errno set to ECANCELED.
+ * The call does not return until the blocked tasks have
+ * had an opportunity to run. Note that the file descriptor 
+ * is not closed, and tasks may immediately re-park themselves
+ * on the fd. To permanently invalidate the ioctx, use 
+ * ioctx_destroy().
+ *
+ */
+void ioctx_cancel(ioctx_t *ctx);
 
 #endif /* __CHIP_RUNTIME_H_ */
