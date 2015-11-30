@@ -5,23 +5,24 @@
 #include <limits.h>
 
 /* 
-	For now, just linux and BSD,
-	and linux is easier to detect,
-	so just try to use kqueue if linux
-	isn't defined.
+   For now, just linux and BSD,
+   and linux is easier to detect,
+   so just try to use kqueue if linux
+   isn't defined.
 
-	The poller defines:
-	void poll(int ms);
-	void pollinit(void);
+   The poller defines:
+   void poll(int ms);
+   void pollinit(void);
 
-	And from runtime.h:
-	int ioctx_init(int fd, ioctx_t *ctx);
-	int ioctx_destroy(ioctx_t *ctx);
+   And from runtime.h:
+   int ioctx_init(int fd, ioctx_t *ctx);
+   int ioctx_destroy(ioctx_t *ctx);
 */
 #ifdef __linux__
 #include "runtime_epoll.h"
 #else
 #include "runtime_kqueue.h"
+#include <fcntl.h>
 #endif
 
 /* run-of-the-mill gcc grossness */
@@ -41,12 +42,6 @@ static void  __panicstr(const char *msg, size_t len) {
 	raise(SIGABRT);
 	_exit(1); /* we probably won't get here. */
 }
-
-/* for type-punning register values */
-typedef union {
-	void      *ptr;
-	uintptr_t val;
-} word_t;
 
 typedef struct {
 /* N.B. keep in sync with context_{arch}.s  */
@@ -111,8 +106,8 @@ struct task_s {
 	int        status; /* STATUS_XXX */
 	int        index;  /* index in arena */
 	regctx_t   ctx;    /* saved register state, if not running */
-	void       (*start)(void*); 
-	void       *udata; /* passed to task->start() */
+	void       (*start)(word_t); 
+	word_t     udata; /* passed to task->start() */
 	void       *stack;
 	arena_t    *arena;
 };
@@ -142,13 +137,13 @@ struct arena_s {
 };
 
 /*
-  mmap() a new arena.
+   mmap() a new arena.
 
-  The arena struct itself occupies the memory beyond
-  all of the stacks.
-  +------------------------------- ... ----------+
-  |  stack  |  stack  |  stack  |       arena    |
-  +------------------------------- ... ----------+
+   The arena struct itself occupies the memory beyond
+   all of the stacks.
+   +------------------------------- ... ----------+
+   |  stack  |  stack  |  stack  |      | arena   |
+   +------------------------------- ... ----------+
  */
 static arena_t *map_arena(void) {
 	void *mem = mmap(NULL, ARENA_MAPPING, PROT_READ|PROT_WRITE,
@@ -168,10 +163,10 @@ static arena_t *map_arena(void) {
 }
 
 /*
-  Rather than un-mapping the memory, we can tell the
-  kernel that the memory no longer needs to remain
-  valid (e.g. it can be unmapped and then zero-filled
-  if it is faulted back in.)
+   Rather than un-mapping the memory, we can tell the
+   kernel that the memory no longer needs to remain
+   valid (e.g. it can be unmapped and then zero-filled
+   if it is faulted back in.)
  */
 static void soft_offline_arena(arena_t *arena) {
 	void *top = arena;
@@ -179,10 +174,10 @@ static void soft_offline_arena(arena_t *arena) {
 	int flags;
 
 	/*
-	  MADV_FREE on BSD has more-or-less the same
-	  semantics as MADV_DONTNEED on linux (for 
-	  private anonymous mappings.) It's fine if the
-	  kernel zero-fills these pages.
+	   MADV_FREE on BSD has more-or-less the same
+	   semantics as MADV_DONTNEED on linux (for 
+	   private anonymous mappings.) It's fine if the
+	   kernel zero-fills these pages.
 	 */
 #ifdef MADV_FREE
 	flags = MADV_FREE;
@@ -239,9 +234,9 @@ static int arena_is_empty(arena_t *arena) {
 }
 
 /*
-  Each stack/task has a magic number that occupies
-  the top word. If we find a stack without this, then
-  a badly-behaved program clobbered it.
+   Each stack/task has a magic number that occupies
+   the top word. If we find a stack without this, then
+   a badly-behaved program clobbered it.
  */
 static inline uintptr_t stack_magic(task_t *task) {
 	return ((uintptr_t)task) ^ (((uintptr_t)task->stack)>>12);
@@ -471,8 +466,15 @@ static inline void smashing_check(task_t *task) {
 
 /* to de-schedule, set runq.running->status, then call swtch(find_work(1)) */
 static void swtch(task_t *next) {
-	runtime_assert_msg(next != runq.running,
-			  "tried to schedule onto self");
+	/*
+	 * unlikely but possible: the task that runs the poller
+	 * is the first one to be available.
+	 */
+	if (unlikely(next == runq.running)) {
+		runq.running->status = STATUS_RUNNING;
+		return;
+	}
+	
 	runtime_assert_msg(next->status == STATUS_RUNNABLE,
 			  "tried to schedule unrunnable task");
 
@@ -526,6 +528,18 @@ static void io_unpark(task_t *task) {
 	ready(task);
 }
 
+/* schedule the target task *immediately* with i/o cancellation */
+static void io_cancel_now(task_t *task) {
+	runtime_assert_msg(task->status == STATUS_IOWAIT,
+			   "io cancelation of task not in iowait");
+
+	task->next = MAP_FAILED;
+	task->status = STATUS_RUNNABLE;
+	--runq.iowait;
+	ready(runq.running); /* set currently-running task as runnable */
+	swtch(task);
+}
+
 int wake(tasklist_t *tl) {
 	runtime_assert_msg(tl != &runq.queue,
 			  "wake called on worklist");
@@ -569,7 +583,7 @@ static void _sbrt_exit(void) {
 			   "runq.running is not running");
 	old->status = STATUS_EMPTY;
 	old->start = NULL;
-	old->udata = NULL;
+	old->udata.ptr = NULL;
 
 	task_t *target;
 	if (runq.begin.top) {
@@ -581,14 +595,7 @@ static void _sbrt_exit(void) {
 	run(target);
 }
 
-/*
-  Create a new runnable task.
-
-  (Usually this results in de-scheduling; allocators
-  of new tasks are put into a lower-priority queue
-  than other runnable tasks.)
- */
-void spawn(void (*start)(void*), void *data) {
+void spawn(void (*start)(word_t), word_t data) {
 	task_t *t;
 	word_t stack;
 	word_t retpc;
@@ -611,23 +618,69 @@ void spawn(void (*start)(void*), void *data) {
 	return;
 }
 
-static void park_and_iowait(task_t **addr) {
+static int park_and_iowait(task_t **addr) {
 	*addr = runq.running;
 	runq.running->status = STATUS_IOWAIT;
 	++runq.iowait;
 	swtch(find_work(1));
 	*addr = NULL;
-	return;
+
+	/* async wakeup due to cancelation */
+	if (unlikely(runq.running->next == MAP_FAILED)) {
+		runq.running->next = NULL;
+		errno = ECANCELED;
+		return -1;
+	}
+
+	return 0;
+}
+
+void ioctx_cancel(ioctx_t *ctx) {
+	if (ctx->writer)
+		io_cancel_now(ctx->writer);
+	
+	if (ctx->reader)
+		io_cancel_now(ctx->reader);
+	
+}
+
+int ioctx_accept(ioctx_t *ctx, struct sockaddr *addr, socklen_t *addrlen) {
+	int res;
+try:
+#ifdef __linux__
+	res = accept4(ctx->fd, addr, addrlen, SOCK_CLOEXEC|SOCK_NONBLOCK);
+#else
+	res = accept(ctx->fd, addr, addrlen);
+#endif
+	if (res == -1 && errno == EAGAIN) {
+		runtime_assert_msg(ctx->reader == NULL, "concurrent calls to accept()");
+		park_and_iowait(&ctx->reader);
+		goto try;
+	}
+#ifndef __linux__
+	if (res > 0) {
+		fcntl(res, F_SETFL, O_CLOEXEC|O_NONBLOCK|(fcntl(res, F_GETFL)));
+	}
+#endif
+	return res;
 }
 
 ssize_t ioctx_write(ioctx_t *ctx, char *buf, size_t bytes) {
+	if (unlikely(ctx->fd == -1)) {
+		errno = ECANCELED;
+		return -1;
+	}
 	ssize_t amt;
 try:
 	amt = write(ctx->fd, buf, bytes);
 	if ((amt == -1) && (errno == EAGAIN)) {
 		runtime_assert_msg(ctx->writer == NULL,
 				   "multiple writers on an ioctx");
-		park_and_iowait(&ctx->writer);
+
+		if (park_and_iowait(&ctx->writer) < 0) {
+			return -1;
+		}
+		
 		goto try;
 	}
 	return amt;
@@ -640,7 +693,10 @@ try:
 	if ((amt == -1) && (errno == EAGAIN)) {
 		runtime_assert_msg(ctx->reader == NULL,
 				   "multiple readers on an ioctx");
-		park_and_iowait(&ctx->reader);
+
+		if (park_and_iowait(&ctx->reader) < 0)
+			return -1;
+		
 		goto try;
 	}
 	return amt;

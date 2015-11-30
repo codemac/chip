@@ -44,6 +44,9 @@ uninstall:
 bin/%.bench: tests/%_bench.c $(INSTALLED_FILES)
 	$(CC) $< $(CFLAGS) -lchip -o $@
 
+bin/%: tests/%.c $(INSTALLED_FILES)
+	$(CC) $< $(CFLAGS) -lchip -o $@
+
 .PHONY: clean
 clean:
 	$(RM) -r *.a *.o *.gch *.test *.bench *.out *.dSYM bin/*

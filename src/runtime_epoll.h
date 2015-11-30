@@ -34,7 +34,14 @@ int ioctx_destroy(ioctx_t *ctx) {
 	if (epoll_ctl(epfd, EPOLL_CTL_DEL, ctx->fd, NULL) < 0) 
 		return -1;
 	
-	return close(ctx->fd);
+	if (close(ctx->fd) == -1)
+		return -1;
+
+	ctx->fd = -1;
+	
+	/* don't leak tasks parked on this ioctx */
+	ioctx_cancel(ctx);
+	return 0;
 }
 
 static void poll(int ms) {

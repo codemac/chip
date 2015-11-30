@@ -2,7 +2,7 @@
 #include <stdio.h>
 #include "chip/chip.h"
 
-void pong(void* nothing) {
+void pong(word_t arg) {
 	for (;;) {
 		sched();
 	}
@@ -13,7 +13,9 @@ void pong(void* nothing) {
 int main(void) {
 	puts("starting ping-pong test...");
 
-	spawn(pong, NULL);
+	word_t arg;
+	arg.val = 0;
+	spawn(pong, arg);
 	clock_t start = clock();
 	for (int i=0; i<PONGS; ++i) {
 		sched();
