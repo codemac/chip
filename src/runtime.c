@@ -33,12 +33,12 @@
 #define runtime_assert_msg(expr, str) if (unlikely(!(expr))) \
 	{ __panicstr(str, sizeof(str)-1); }
 
-#define panic(str) __panicstr(str, sizeof(str)-1)
+#define panic(str) __panicstr(str"\n", sizeof(str))
 
 __attribute__((cold))
 __attribute__((noreturn))
 static void  __panicstr(const char *msg, size_t len) {
-	write(2, msg, len);
+	write(STDERR_FILENO, msg, len);
 	raise(SIGABRT);
 	_exit(1); /* we probably won't get here. */
 }
@@ -107,7 +107,7 @@ struct task_s {
 	int        index;  /* index in arena */
 	regctx_t   ctx;    /* saved register state, if not running */
 	void       (*start)(word_t); 
-	word_t     udata; /* passed to task->start() */
+	word_t     udata;  /* passed to task->start() */
 	void       *stack;
 	arena_t    *arena;
 };
@@ -146,11 +146,18 @@ struct arena_s {
    +------------------------------- ... ----------+
  */
 static arena_t *map_arena(void) {
-	void *mem = mmap(NULL, ARENA_MAPPING, PROT_READ|PROT_WRITE,
+	void *mem;
+
+do_map_arena:
+	mem = mmap(NULL, ARENA_MAPPING, PROT_READ|PROT_WRITE,
 			 MAP_PRIVATE|MAP_ANON, -1, 0);
-	if (unlikely(mem == MAP_FAILED))
+	if (unlikely(mem == MAP_FAILED)) {
+		if (errno == EINTR)
+			goto do_map_arena;
+		
 		return NULL;
-	
+	}
+
 	arena_t *out = (arena_t *)(mem + ARENA_STACK_MAPPING);
 
 	for (int i=0; i<ARENA_TASKS; ++i) {
@@ -476,7 +483,7 @@ static void swtch(task_t *next) {
 	}
 	
 	runtime_assert_msg(next->status == STATUS_RUNNABLE,
-			  "tried to schedule unrunnable task");
+			   "tried to schedule unrunnable task");
 
 	smashing_check(next);
 
@@ -652,14 +659,33 @@ try:
 #else
 	res = accept(ctx->fd, addr, addrlen);
 #endif
-	if (res == -1 && errno == EAGAIN) {
-		runtime_assert_msg(ctx->reader == NULL, "concurrent calls to accept()");
-		park_and_iowait(&ctx->reader);
-		goto try;
+	if (res == -1) {
+		switch (errno) {
+		case EAGAIN:
+			runtime_assert_msg(ctx->reader == NULL, "concurrent calls to accept()");
+			if (unlikely(park_and_iowait(&ctx->reader) < 0))
+				return -1;
+			
+		case EINTR:
+			goto try;
+		default:
+			return -1;
+		}
 	}
 #ifndef __linux__
-	if (res > 0) {
-		fcntl(res, F_SETFL, O_CLOEXEC|O_NONBLOCK|(fcntl(res, F_GETFL)));
+	int fl;
+set_flags:
+	fl = fcntl(res, F_SETFL, O_CLOEXEC|O_NONBLOCK|(fcntl(res, F_GETFL)));
+	if (unlikely(fl == -1)) {
+		if (errno == EINTR)
+			goto set_flags;
+
+		int saved = errno;
+		do {
+			fl = close(res);
+		} while (fl == -1 && errno == EINTR);
+		errno = saved;
+		return -1;
 	}
 #endif
 	return res;
@@ -673,15 +699,18 @@ ssize_t ioctx_write(ioctx_t *ctx, char *buf, size_t bytes) {
 	ssize_t amt;
 try:
 	amt = write(ctx->fd, buf, bytes);
-	if ((amt == -1) && (errno == EAGAIN)) {
-		runtime_assert_msg(ctx->writer == NULL,
-				   "multiple writers on an ioctx");
+	if (amt == -1) {
+		switch (errno) {
+		case EAGAIN:
+			runtime_assert_msg(ctx->writer == NULL,
+					   "multiple writers on an ioctx");
 
-		if (park_and_iowait(&ctx->writer) < 0) {
-			return -1;
+			if (unlikely(park_and_iowait(&ctx->writer) < 0))
+				return -1;
+
+		case EINTR:
+			goto try;
 		}
-		
-		goto try;
 	}
 	return amt;
 }
@@ -690,14 +719,18 @@ ssize_t ioctx_read(ioctx_t *ctx, char *buf, size_t max) {
 	ssize_t amt;
 try:
 	amt = read(ctx->fd, buf, max);
-	if ((amt == -1) && (errno == EAGAIN)) {
-		runtime_assert_msg(ctx->reader == NULL,
-				   "multiple readers on an ioctx");
+	if (amt == -1) {
+		switch (errno) {
+		case EAGAIN:
+			runtime_assert_msg(ctx->reader == NULL,
+					   "multiple readers on an ioctx");
 
-		if (park_and_iowait(&ctx->reader) < 0)
-			return -1;
-		
-		goto try;
+			if (unlikely(park_and_iowait(&ctx->reader) < 0))
+				return -1;
+
+		case EINTR:
+			goto try;
+		}
 	}
 	return amt;
 }

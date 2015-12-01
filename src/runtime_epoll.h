@@ -11,8 +11,12 @@ static int epfd;
 static struct epoll_event events[128];
 
 void pollinit(void) {
+create:
 	epfd = epoll_create1(EPOLL_CLOEXEC);
 	if (epfd == -1) {
+		if (errno == EINTR)
+			goto create;
+			
 		perror("epoll_creat1");
 		_exit(1);
 	}
@@ -21,8 +25,15 @@ void pollinit(void) {
 int ioctx_init(int fd, ioctx_t *ctx) {
 	events[0].data.ptr = ctx;
 	events[0].events = EPOLLERR|EPOLLET|EPOLLIN|EPOLLOUT|EPOLLRDHUP|EPOLLHUP;
-	if (epoll_ctl(epfd, EPOLL_CTL_ADD, fd, &events[0]) < 0)
+
+again:
+	if (epoll_ctl(epfd, EPOLL_CTL_ADD, fd, &events[0]) < 0) {
+		if (errno == EINTR)
+			goto again;
+
 		return -1;
+	}
+
 
 	ctx->fd = fd;
 	ctx->writer = NULL;
@@ -31,12 +42,20 @@ int ioctx_init(int fd, ioctx_t *ctx) {
 }
 
 int ioctx_destroy(ioctx_t *ctx) {
-	if (epoll_ctl(epfd, EPOLL_CTL_DEL, ctx->fd, NULL) < 0) 
+epoll_del:
+	if (epoll_ctl(epfd, EPOLL_CTL_DEL, ctx->fd, NULL) < 0) {
+		if (errno == EINTR)
+			goto epoll_del;
+		
 		return -1;
-	
-	if (close(ctx->fd) == -1)
+	}
+fd_close:
+	if (close(ctx->fd) == -1) {
+		if (errno == EINTR)
+			goto fd_close;
+		
 		return -1;
-
+	}
 	ctx->fd = -1;
 	
 	/* don't leak tasks parked on this ioctx */
@@ -47,7 +66,7 @@ int ioctx_destroy(ioctx_t *ctx) {
 static void poll(int ms) {
 	int nev;
 entry:
-	nev = epoll_wait(epfd, &events[0], 64, ms);
+	nev = epoll_wait(epfd, &events[0], 128, ms);
 	if (nev == -1) {
 		switch (errno) {
 		case EINTR:
@@ -74,11 +93,11 @@ entry:
 		}
 	}
 	/*
-		We have to handle the case in which the
-		user has initialized some (perhaps many)
-		different fds, but is not waiting on many 
-		of them, and has nonetheless managed to park
-		all of the tasks.
+	  We have to handle the case in which the
+	  user has initialized some (perhaps many)
+	  different fds, but is not waiting on many 
+	  of them, and has nonetheless managed to park
+	  all of the tasks.
 	 */
 	if (woke == 0 && ms == -1)
 		goto entry;

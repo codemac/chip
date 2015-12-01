@@ -34,8 +34,15 @@ int ioctx_init(int fd, ioctx_t *ctx) {
 	events[1].fflags = 0;
 
 	struct timespec zero = { 0, 0 };
-	int nev = kevent(kqfd, &events[0], 2, &events[2], 62, &zero);
-	if (nev == -1) return -1;
+	int nev;
+get_events:
+	nev = kevent(kqfd, &events[0], 2, &events[2], 126, &zero);
+	if (nev == -1) {
+		if (errno == EINTR)
+			goto get_events;
+
+		return -1;
+	}
 	handle_events(2, 2+nev);
 
 	ctx->fd = fd;
@@ -45,8 +52,13 @@ int ioctx_init(int fd, ioctx_t *ctx) {
 }
 
 int ioctx_destroy(ioctx_t *ctx) {
-	if (close(ctx->fd) == -1)
+do_close:
+	if (close(ctx->fd) == -1) {
+		if (errno == EINTR)
+			goto do_close;
+
 		return -1;
+	}
 
 	ctx->fd = -1;
 	ioctx_cancel(ctx);
@@ -64,7 +76,7 @@ static void poll(int ms) {
 
 	int nev;
 kevent_wait:
-	nev = kevent(kqfd, NULL, 0, &events[0], 64, t);
+	nev = kevent(kqfd, NULL, 0, &events[0], 128, t);
 	if (nev == -1) {
 		switch (errno) {			
 		case EINTR:
