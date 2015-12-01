@@ -1,5 +1,6 @@
 #ifndef __CHIP_RUNTIME_H_
 #define __CHIP_RUNTIME_H_
+#include <stdint.h>
 #include <stddef.h>
 #include <sys/types.h>
 #include <sys/socket.h>
@@ -9,6 +10,9 @@ typedef union {
 	void      *ptr;
 	uintptr_t val;
 	int       fd;
+
+	/* for pedants */
+	void     (*fnptr)(void);
 } word_t;
 
 /*

@@ -3,6 +3,10 @@
 #include "runtime.h"
 #include <assert.h>
 
+const word_t __zero_arg;
+
+#define NULL_ARG __zero_arg
+
 /*
  * sema_t is a semaphore.
  */

@@ -23,7 +23,7 @@ if (echo $target | grep -q linux) {
     POLLER = kqueue
 } else echo 'Unsupported OS' && exit 1
 
-flags = (O3 g Wall Werror)
+flags = (O3 g Wall Werror std'='c11 pedantic-errors)
 
 # detect musl-gcc
 if (test `{whatis musl-gcc}) {

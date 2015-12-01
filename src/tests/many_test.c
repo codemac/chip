@@ -28,15 +28,13 @@ static void inc(word_t data) {
 int main(void) {
 	puts("running "__FILE__);
 	lock(&ilock);
-	word_t zero;
-	zero.val = 0;
 	
         /* 
 	   with the lock held, start a bunch of tasks 
 	   that contend on the lock.
 	 */
 	for (int i=0; i<INCS; ++i) {
-		spawn(inc, zero);
+		spawn(inc, NULL_ARG);
 	}
 
 	tsk_stats_t stats;
