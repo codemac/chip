@@ -1,13 +1,8 @@
-#include "runtime.h"
-#include <sys/epoll.h>
-#include <unistd.h>
-#include <stdio.h>
-#include <errno.h>
 
 static void io_unpark(task_t *t);
+static int park_and_iowait(task_t **addr);
 
 static int epfd;
-
 static struct epoll_event events[128];
 
 void pollinit(void) {
@@ -61,6 +56,26 @@ fd_close:
 	/* don't leak tasks parked on this ioctx */
 	ioctx_cancel(ctx);
 	return 0;
+}
+
+int ioctx_accept(ioctx_t *ctx, struct sockaddr *addr, socklen_t *addrlen) {
+	int res;
+try:
+	res = accept4(ctx->fd, addr, addrlen, SOCK_CLOEXEC|SOCK_NONBLOCK);
+	if (res == -1) {
+		switch (errno) {
+		case EAGAIN:
+			if (unlikely(ctx->reader))
+				panic("concurrent calls to accept()");
+
+			if (unlikely(park_and_iowait(&ctx->reader) < 0))
+				return -1;
+
+		case EINTR:
+			goto try;
+		}
+	}
+	return res;
 }
 
 static void poll(int ms) {

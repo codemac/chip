@@ -1,13 +1,8 @@
-#include "runtime.h"
-#include <unistd.h>
-#include <stdio.h>
-#include <errno.h>
-#include <sys/event.h>
 
 static void io_unpark(task_t *t);
+static int park_and_iowait(task_t **addr);
 
 static int kqfd;
-
 static struct kevent events[128];
 
 static void pollinit(void) {
@@ -49,6 +44,43 @@ get_events:
 	ctx->writer = NULL;
 	ctx->reader = NULL;
 	return 0;
+}
+
+int ioctx_accept(ioctx_t *ctx, struct sockaddr *addr, socklen_t *addrlen) {
+	int res;
+try:
+	res = accept(ctx->fd, addr, addrlen);
+	if (res == -1) {
+		switch (errno) {
+		case EAGAIN:
+			if (unlikely(ctx->reader))
+				panic("concurrent calls to accept()");
+
+			if (unlikely(park_and_iowait(&ctx->reader) < 0))
+				return -1;
+			
+		case EINTR:
+			goto try;
+		default:
+			return -1;
+		}
+	}
+	
+	int fl;
+set_flags:
+	fl = fcntl(res, F_SETFL, O_CLOEXEC|O_NONBLOCK|(fcntl(res, F_GETFL)));
+	if (unlikely(fl == -1)) {
+		if (errno == EINTR)
+			goto set_flags;
+
+		int saved = errno;
+		do {
+			fl = close(res);
+		} while (fl == -1 && errno == EINTR);
+		errno = saved;
+		return -1;
+	}
+	return res;
 }
 
 int ioctx_destroy(ioctx_t *ctx) {

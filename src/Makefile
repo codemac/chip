@@ -1,10 +1,11 @@
 # NOTE: `make` is run from the build script, which detects host arch and OS
 
-RUNTIME_HEADERS := runtime.h chip.h runtime_$(POLLER).h
-RUNTIME_SOURCE := runtime.c context_$(ARCH).s
+RUNTIME_HEADERS := runtime.h chip.h
+RUNTIME_INCLUDES := runtime_$(POLLER).c runtime_$(ARCH).c
+RUNTIME_SOURCE := runtime.c context_$(ARCH).s 
 
 # trigger re-compilation when one of the headers changes
-$(RUNTIME_SOURCE): $(RUNTIME_HEADERS)
+$(RUNTIME_SOURCE): $(RUNTIME_HEADERS) $(RUNTIME_INCLUDES)
 
 # just compile/link tests in one go.
 bin/%.test: tests/%_test.c $(RUNTIME_SOURCE)
@@ -31,7 +32,6 @@ $(CHIP_INCLUDE_DIR)/%.h: %.h
 INSTALLED_FILES := $(ARCHIVE) \
 	$(CHIP_INCLUDE_DIR)/runtime.h \
 	$(CHIP_INCLUDE_DIR)/chip.h \
-	$(CHIP_INCLUDE_DIR)/runtime_$(POLLER).h
 
 .PHONY: install
 install: $(INSTALLED_FILES) 

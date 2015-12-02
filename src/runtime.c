@@ -4,27 +4,10 @@
 #include <sys/mman.h>
 #include <signal.h>
 #include <limits.h>
-
-/* 
-   For now, just linux and BSD,
-   and linux is easier to detect,
-   so just try to use kqueue if linux
-   isn't defined.
-
-   The poller defines:
-   void poll(int ms);
-   void pollinit(void);
-
-   And from runtime.h:
-   int ioctx_init(int fd, ioctx_t *ctx);
-   int ioctx_destroy(ioctx_t *ctx);
-*/
-#ifdef __linux__
-#include "runtime_epoll.h"
-#else
-#include "runtime_kqueue.h"
-#include <fcntl.h>
-#endif
+#include <unistd.h>
+#include <stdio.h>
+#include <errno.h>
+#include "runtime.h"
 
 /* run-of-the-mill gcc grossness */
 #define unlikely(expr) __builtin_expect(!!(expr), 0)
@@ -45,47 +28,33 @@ static void  __panicstr(const char *msg, size_t len) {
 	_exit(1); /* we probably won't get here. */
 }
 
-typedef struct {
-/* N.B. keep in sync with context_{arch}.s  */
+/* 
+  void poll(int ms);
+  void pollinit(void);
+  int ioctx_init(int fd, ioctx_t *ctx);
+  int ioctx_destroy(ioctx_t *ctx);
+  int ioctx_accept(ioctx_t *ctx);
+ */
+#ifdef __linux__
+#include <sys/epoll.h>
+#include "runtime_epoll.c"
+#else
+#include <sys/event.h>
+#include "runtime_kqueue.c"
+#include <fcntl.h>
+#endif
+
+/*
+  regctx_t;
+  inline void setup(regctx_t *ctx, char *stack, void (*retpc)(void));
+ */
 #ifdef __x86_64__
-	word_t rbx;
-	word_t rbp;
-	word_t r10;
-	word_t r11;
-	word_t r12;
-	word_t r13;
-	word_t r14;
-	word_t r15;
-	word_t rsp;
+#include "runtime_amd64.c"
 #elif __arm__
-	word_t r4;
-	word_t r5;
-	word_t r6;
-	word_t r7;
-	word_t r8;
-	word_t r9;
-	word_t r10;
-	word_t r11;
-	word_t r12;
-	word_t r13;
-	word_t r14;
+#include "runtime_arm.c"
 #else
 #error "unsupported arch"
 #endif
-} regctx_t;
-
-/* ABI-specific register/stack setup. Unavoidably hairy. */
-static inline void setup(regctx_t *ctx, word_t stack, word_t retpc) {
-	/*  the top word is magic, and most ABIs require two-word alignment */
-	stack.val -= 2*sizeof(uintptr_t);
-#ifdef __x86_64__
-	ctx->rsp = stack;
-	*(uintptr_t *)stack.ptr = retpc.val;
-#elif __arm__
-	ctx->r13 = stack;
-	ctx->r14 = retpc;
-#endif
-}
 
 extern void _swapctx(regctx_t *save, const regctx_t *load);
 
@@ -599,8 +568,6 @@ static void _sbrt_exit(void) {
 
 void spawn(void (*start)(word_t), word_t data) {
 	task_t *t;
-	word_t stack;
-	word_t retpc;
 	
 	if (runq.begin.top || runq.queue.top) {
 		wait(&runq.begin);
@@ -615,9 +582,7 @@ void spawn(void (*start)(word_t), word_t data) {
 
 	t->udata = data;
 	t->start = start;
-	stack.ptr = t->stack;
-	retpc.fnptr = _sbrt_entry;
-	setup(&t->ctx, stack, retpc);
+	setup(&t->ctx, t->stack, _sbrt_entry);
 	ready(t);
 	return;
 }
@@ -646,48 +611,6 @@ void ioctx_cancel(ioctx_t *ctx) {
 	if (ctx->reader)
 		io_cancel_now(ctx->reader);
 	
-}
-
-int ioctx_accept(ioctx_t *ctx, struct sockaddr *addr, socklen_t *addrlen) {
-	int res;
-try:
-#ifdef __linux__
-	res = accept4(ctx->fd, addr, addrlen, SOCK_CLOEXEC|SOCK_NONBLOCK);
-#else
-	res = accept(ctx->fd, addr, addrlen);
-#endif
-	if (res == -1) {
-		switch (errno) {
-		case EAGAIN:
-			if (unlikely(ctx->reader))
-				panic("concurrent calls to accept()");
-
-			if (unlikely(park_and_iowait(&ctx->reader) < 0))
-				return -1;
-			
-		case EINTR:
-			goto try;
-		default:
-			return -1;
-		}
-	}
-#ifndef __linux__
-	int fl;
-set_flags:
-	fl = fcntl(res, F_SETFL, O_CLOEXEC|O_NONBLOCK|(fcntl(res, F_GETFL)));
-	if (unlikely(fl == -1)) {
-		if (errno == EINTR)
-			goto set_flags;
-
-		int saved = errno;
-		do {
-			fl = close(res);
-		} while (fl == -1 && errno == EINTR);
-		errno = saved;
-		return -1;
-	}
-#endif
-	return res;
 }
 
 ssize_t ioctx_write(ioctx_t *ctx, char *buf, size_t bytes) {
