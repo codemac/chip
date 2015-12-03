@@ -8,6 +8,7 @@ benchs = `{ls tests/*_bench.c | sed -e s/_bench.c// -e s/tests\///}
 target = `{gcc -v |[2] grep Target}
 
 CC = gcc
+flags = (O3 g Wall Werror std'='c11 pedantic-errors)
 
 # detect host arch
 if (echo $target | grep -q x86_64) {
@@ -19,11 +20,17 @@ if (echo $target | grep -q x86_64) {
 # detect host OS
 if (echo $target | grep -q linux) {
     POLLER = epoll
-} else if (echo $target | grep -q 'bsd\|darwin') { 
+} else if (echo $target | grep -q 'darwin') { 
+    # If we don't force the frame pointer to be
+    # ommitted, for some reason clang ignores 
+    # it as a clobber, which causes nasty bugs.
+    # We need to force -fomit-frame-pointer.
+    CC = clang
+    flags = ($flags fomit-frame-pointer)
+    POLLER = kqueue
+} else if (echo $target | grep -q 'bsd') {
     POLLER = kqueue
 } else echo 'Unsupported OS' && exit 1
-
-flags = (O3 g Wall Werror std'='c11 pedantic-errors)
 
 # detect musl-gcc
 if (test `{whatis musl-gcc}) {

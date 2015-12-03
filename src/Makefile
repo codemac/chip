@@ -2,7 +2,7 @@
 
 RUNTIME_HEADERS := runtime.h chip.h
 RUNTIME_INCLUDES := runtime_$(POLLER).c runtime_$(ARCH).c
-RUNTIME_SOURCE := runtime.c context_$(ARCH).s 
+RUNTIME_SOURCE := runtime.c
 
 # trigger re-compilation when one of the headers changes
 $(RUNTIME_SOURCE): $(RUNTIME_HEADERS) $(RUNTIME_INCLUDES)
@@ -22,7 +22,7 @@ CHIP_INCLUDE_DIR := $(INCLUDE_DIR)/chip
 # that it is up-to-date.
 $(ARCHIVE): $(RUNTIME_HEADERS) $(RUNTIME_SOURCE)
 	$(CC) -c $(CFLAGS) $(RUNTIME_SOURCE)
-	ar rcs libchip.a runtime.o context_$(ARCH).o
+	ar rcs libchip.a runtime.o
 	mv libchip.a $@
 
 $(CHIP_INCLUDE_DIR)/%.h: %.h

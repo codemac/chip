@@ -1,6 +1,7 @@
+#define _GNU_SOURCE
 #include <stdint.h>
 #include <stddef.h>
-#define _BSD_SOURCE
+#include <sys/socket.h>
 #include <sys/mman.h>
 #include <signal.h>
 #include <limits.h>
@@ -28,26 +29,30 @@ static void  __panicstr(const char *msg, size_t len) {
 	_exit(1); /* we probably won't get here. */
 }
 
-/* 
-  void poll(int ms);
-  void pollinit(void);
-  int ioctx_init(int fd, ioctx_t *ctx);
-  int ioctx_destroy(ioctx_t *ctx);
-  int ioctx_accept(ioctx_t *ctx);
- */
+/* --- OS-specific declarations --- */
+
+static void poll(int ms);
+static void pollinit(void);
+
 #ifdef __linux__
 #include <sys/epoll.h>
 #include "runtime_epoll.c"
 #else
 #include <sys/event.h>
-#include "runtime_kqueue.c"
 #include <fcntl.h>
+#include "runtime_kqueue.c"
 #endif
 
-/*
-  regctx_t;
-  inline void setup(regctx_t *ctx, char *stack, void (*retpc)(void));
- */
+/* --- architecture-specific declarations --- */
+
+typedef struct regctx_s regctx_t;
+
+static inline void setup(regctx_t *ctx, char *stack, void (*retpc)(void));
+static void _swapctx(regctx_t *save, const regctx_t *load);
+
+__attribute__((noreturn))
+static void _loadctx(const regctx_t *load);
+
 #ifdef __x86_64__
 #include "runtime_amd64.c"
 #elif __arm__
@@ -55,11 +60,6 @@ static void  __panicstr(const char *msg, size_t len) {
 #else
 #error "unsupported arch"
 #endif
-
-extern void _swapctx(regctx_t *save, const regctx_t *load);
-
-__attribute__((noreturn))
-extern void _loadctx(const regctx_t *load);
 
 /* possible task statuses */
 enum {
