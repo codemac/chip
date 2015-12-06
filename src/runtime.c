@@ -47,7 +47,8 @@ static void pollinit(void);
 
 typedef struct regctx_s regctx_t;
 
-static inline void setup(regctx_t *ctx, char *stack, void (*retpc)(void));
+static inline word_t get_arg0(char *stack);
+static inline void setup(regctx_t *ctx, char *stack, void (*retpc)(void), word_t arg0);
 static void _swapctx(regctx_t *save, const regctx_t *load);
 
 __attribute__((noreturn))
@@ -78,7 +79,6 @@ struct task_s {
 	int        index;  /* index in arena */
 	regctx_t   ctx;    /* saved register state, if not running */
 	void       (*start)(word_t); 
-	word_t     udata;  /* passed to task->start() */
 	char       *stack;
 	arena_t    *arena;
 };
@@ -532,7 +532,8 @@ int wakeall(tasklist_t *tl) {
 /* task entry point */
 __attribute__((noreturn))
 static void _sbrt_entry(void) {
-	runq.running->start(runq.running->udata);
+	task_t *self = runq.running;
+	self->start(get_arg0(self->stack));
 	_sbrt_exit();
 }
 
@@ -554,7 +555,6 @@ static void _sbrt_exit(void) {
 	BUG_ON(old->status != STATUS_RUNNING);
 	old->status = STATUS_EMPTY;
 	old->start = NULL;
-	old->udata.ptr = NULL;
 
 	task_t *target;
 	if (runq.begin.top) {
@@ -580,9 +580,8 @@ void spawn(void (*start)(word_t), word_t data) {
 	if (unlikely(t == NULL))
 		panic("out of memory");
 
-	t->udata = data;
 	t->start = start;
-	setup(&t->ctx, t->stack, _sbrt_entry);
+	setup(&t->ctx, t->stack, _sbrt_entry, data);
 	ready(t);
 	return;
 }

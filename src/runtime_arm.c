@@ -3,8 +3,20 @@ struct regctx_s {
 	word_t ret;
 };
 
-static inline void setup(regctx_t *ctx, char *stack, void (*retpc)(void)) {
-	ctx->sp.ptr = stack - 2*sizeof(uintptr_t);
+static inline word_t get_arg0(char *stack) {
+	return *(word_t *)(stack - 2*sizeof(uintptr_t));
+}
+
+static inline void setup(regctx_t *ctx, char *stack, void (*retpc)(void), word_t arg0) {
+	/*
+	 * ARM wants an 8-byte-aligned stack on entry, so
+	 * +-------+------+----
+	 * | magic | arg0 | ...
+	 * +-------+------+----
+	 */
+	char *arg0_addr = stack - 2*sizeof(uintptr_t);
+	*(word_t *)arg0_addr = arg0;
+	ctx->sp.ptr = arg0_addr;
 	ctx->ret.fnptr = retpc;
 }
 

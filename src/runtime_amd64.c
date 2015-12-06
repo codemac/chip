@@ -3,8 +3,21 @@ struct regctx_s {
 	word_t retpc;
 };
 
-static inline void setup(regctx_t *ctx, char *stack, void (*retpc)(void)) {
-	ctx->rsp.ptr = stack - sizeof(uintptr_t);
+static inline word_t get_arg0(char *stack) {
+	return *(word_t *)(stack - 2*sizeof(uintptr_t));
+}
+
+static inline void setup(regctx_t *ctx, char *stack, void (*retpc)(void), word_t arg0) {
+	/*
+	 * On entry, the stack must be 8-byte misaligned, so the
+	 * top of the stack looks like
+	 * +-------+-------+------+----
+	 * | magic | arg0  | zero | ...
+	 * + ------+-------+------+----
+	 */
+	char *arg0_addr = stack - 2*sizeof(uintptr_t);
+	*(word_t *)arg0_addr = arg0;
+	ctx->rsp.ptr = stack - 3*sizeof(uintptr_t);
 	ctx->retpc.fnptr = retpc;
 }
 
