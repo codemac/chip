@@ -18,7 +18,7 @@ In order to help manage memory consumption, the scheduler maintains a separate q
 
 #### Stack allocation
 
-Stacks (and their associated metadata, see `task_t`) are arena-allocated using `mmap()`. Each arena contains `sizeof(uintptr_t)*8` tasks (because each arena is just a first-fit bitmap allocator). All but the most-recently-used empty arenas are soft-offlined by the memory manager (through `madvice(MADV_DONTEED)` or equivalent.) The arena selected for new allocation is just the arena from which the last task was free'd. This keeps all allocations O(1) and with reasonable locality. (Note that pure-LIFO stack allocation would have the best temporal locality for the first allocated stack, but then declining temporal locality for each stack subsequently allocated. Instead, we always allocate the lowest-addressed free stack from each arena, which has optimal spatial locality, and reasonably good temporal locality, because it is still LIFO in the one-stack case.)
+Stacks (and their associated metadata, see `task_t`) are arena-allocated using `mmap()`. Each arena contains `sizeof(uintptr_t)*8` tasks (because each arena is just a first-fit bitmap allocator). All but the most-recently-used empty arenas are soft-offlined by the memory manager (through `madvise(MADV_DONTEED)` or equivalent.) The arena selected for new allocation is just the arena from which the last task was free'd. This keeps all allocations O(1) and with reasonable locality. (Note that pure-LIFO stack allocation would have the best temporal locality for the first allocated stack, but then declining temporal locality for each stack subsequently allocated. Instead, we always allocate the lowest-addressed free stack from each arena, which has optimal spatial locality, and reasonably good temporal locality, because it is still LIFO in the one-stack case.)
 
 ##### Stack Guards
 
@@ -30,7 +30,9 @@ In order to guard against stack overflow, the runtime inserts a canary at the to
 
 #### Supported Platforms
 
-Chip supports Unix systems on x86_64 and ARMv7 (you need support for the `ldm` and `stm` instructions), although most of the optimization effort has gone into Linux+ARMv7+musl-gcc builds, since that is *my* deployment environment. Porting the runtime to new architectures/ABIs is pretty easy, but each new platform imposes new testing requirements. Today, I test changes on Linux/x86_64, Linux/ARMv7, and OSX/x86_64.
+Chip supports Unix systems on x86_64 and ARMv7, although most of the optimization effort has gone into Linux+ARMv7+musl-gcc builds, since that is *my* deployment environment. Porting the runtime to new architectures/ABIs is pretty easy, but each new platform imposes new testing requirements. Today, I test changes on Linux/x86_64, Linux/ARMv7, and OSX/x86_64.
+
+NOTE: On ARM, you'll need to compile your binary with `-mfloat-abi=softfp` if you want to use floating-point operations (across scheduler boundaries) safely, as the context-switching code does not preserve floating point registers.
 
 ##### OS support
 
@@ -56,7 +58,6 @@ In the source directory, you can use the `build` script to build, test, benchmar
  - `./build install` builds and installs the library and header files.
  - `./build bench` builds and runs benchmark binaries (and depends on `install`.)
  - `./build uninstall` un-does what `./build install` does.
-
 
 ### License
 
