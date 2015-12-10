@@ -23,11 +23,11 @@ CHIP_INCLUDE_DIR := $(INCLUDE_DIR)/chip
 $(ARCHIVE): $(RUNTIME_HEADERS) $(RUNTIME_SOURCE)
 	$(CC) -c $(CFLAGS) $(RUNTIME_SOURCE)
 	ar rcs libchip.a runtime.o
-	mv libchip.a $@
+	sudo mv libchip.a $@
 
 $(CHIP_INCLUDE_DIR)/%.h: %.h
-	mkdir -p $(CHIP_INCLUDE_DIR)
-	cp $^ $@
+	sudo mkdir -p $(CHIP_INCLUDE_DIR)
+	sudo cp $^ $@
 
 INSTALLED_FILES := $(ARCHIVE) \
 	$(CHIP_INCLUDE_DIR)/runtime.h \
@@ -38,7 +38,7 @@ install: $(INSTALLED_FILES)
 
 .PHONY: uninstall
 uninstall:
-	$(RM) $(INSTALLED_FILES)
+	sudo $(RM) $(INSTALLED_FILES)
 
 # benchmarks link against the archive
 bin/%.bench: tests/%_bench.c $(INSTALLED_FILES)
