@@ -14,6 +14,7 @@ static sema_t sema;
 
 static void inc(word_t data) {
 	if (++count == INCS) {
+		assert(data.val == 0);
 		tsk_stats_t stats;
 		get_tsk_stats(&stats);
 		assert(stats.parked == 1);
@@ -42,11 +43,8 @@ int main(void) {
 	/* no tasks to run -- should return immediately */
 	sched();
 
-	word_t zero;
-	zero.val = 0;
-	/* spawn tasks that run 'inc' */
 	for (int i=0; i<INCS; ++i) {
-		spawn(inc, zero);
+		spawn(inc, NULL_ARG);
 	}
 	get_tsk_stats(&stats);
 	printf("after %d spawns, %d parked, %d free, %d runnable\n", INCS, stats.parked, stats.free, stats.runnable);

@@ -16,9 +16,8 @@ static char read_buf[4096];
 
 #define NUM_BYTES (1<<22)
 
-void pipe_canceler(word_t data) {
-	ioctx_t *ctx = data.ptr;
-	ioctx_cancel(ctx);
+static void pipe_canceler(word_t data) {
+	ioctx_cancel((ioctx_t *)data.ptr);
 }
 
 void pipe_writer(word_t data) {
@@ -34,8 +33,7 @@ void pipe_writer(word_t data) {
 	please(zero = open("/dev/zero", O_RDONLY));
 
 	/* as soon as we block, the cancel-er will be spawned */
-	word_t out;
-	out.ptr = &ctx;
+	word_t out = { .ptr = &ctx };
 	spawn(pipe_canceler, out);
 	
 	do {

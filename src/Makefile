@@ -1,10 +1,11 @@
 # NOTE: `make` is run from the build script, which detects host arch and OS
 
-RUNTIME_HEADERS := runtime.h chip.h runtime_$(POLLER).h
-RUNTIME_SOURCE := runtime.c context_$(ARCH).s
+RUNTIME_HEADERS := runtime.h chip.h
+RUNTIME_INCLUDES := runtime_$(POLLER).c runtime_$(ARCH).c
+RUNTIME_SOURCE := runtime.c
 
 # trigger re-compilation when one of the headers changes
-$(RUNTIME_SOURCE): $(RUNTIME_HEADERS)
+$(RUNTIME_SOURCE): $(RUNTIME_HEADERS) $(RUNTIME_INCLUDES)
 
 # just compile/link tests in one go.
 bin/%.test: tests/%_test.c $(RUNTIME_SOURCE)
@@ -21,24 +22,23 @@ CHIP_INCLUDE_DIR := $(INCLUDE_DIR)/chip
 # that it is up-to-date.
 $(ARCHIVE): $(RUNTIME_HEADERS) $(RUNTIME_SOURCE)
 	$(CC) -c $(CFLAGS) $(RUNTIME_SOURCE)
-	ar rcs libchip.a runtime.o context_$(ARCH).o
-	mv libchip.a $@
+	ar rcs libchip.a runtime.o
+	sudo mv libchip.a $@
 
 $(CHIP_INCLUDE_DIR)/%.h: %.h
-	mkdir -p $(CHIP_INCLUDE_DIR)
-	cp $^ $@
+	sudo mkdir -p $(CHIP_INCLUDE_DIR)
+	sudo cp $^ $@
 
 INSTALLED_FILES := $(ARCHIVE) \
 	$(CHIP_INCLUDE_DIR)/runtime.h \
 	$(CHIP_INCLUDE_DIR)/chip.h \
-	$(CHIP_INCLUDE_DIR)/runtime_$(POLLER).h
 
 .PHONY: install
 install: $(INSTALLED_FILES) 
 
 .PHONY: uninstall
 uninstall:
-	$(RM) $(INSTALLED_FILES)
+	sudo $(RM) $(INSTALLED_FILES)
 
 # benchmarks link against the archive
 bin/%.bench: tests/%_bench.c $(INSTALLED_FILES)

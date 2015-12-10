@@ -1,5 +1,6 @@
 #ifndef __CHIP_RUNTIME_H_
 #define __CHIP_RUNTIME_H_
+#include <stdint.h>
 #include <stddef.h>
 #include <sys/types.h>
 #include <sys/socket.h>
@@ -9,6 +10,9 @@ typedef union {
 	void      *ptr;
 	uintptr_t val;
 	int       fd;
+
+	/* for pedants */
+	void     (*fnptr)(void);
 } word_t;
 
 /*
@@ -80,6 +84,14 @@ int wake(tasklist_t *list);
  */
 int wakeall(tasklist_t *list);
 
+/*
+ * An ioctx_t represents a file descriptor 
+ * and its I/O state. It serves as a mediator 
+ * between the chip runtime and the operating 
+ * system. Users should treat its contents as 
+ * opaque, and only mutate it through calls to 
+ * the ioctx_XXX family of functions.
+ */
 typedef struct {
 	int fd;
 	task_t *writer;
@@ -117,7 +129,8 @@ int ioctx_destroy(ioctx_t *ctx);
  * available for writing (EAGAIN), then the
  * scheduler will be invoked, and the write
  * will be re-tried when the operating system
- * says the fd is writeable.
+ * says the fd is writeable. The write will also 
+ * be re-tried on EINTR.
  *
  * Two tasks trying to perform writes on the
  * same fd at the same time will have undefined 
@@ -135,7 +148,8 @@ ssize_t ioctx_write(ioctx_t *ctx, char *buf, size_t bytes);
  * available for reading (EAGAIN), then the
  * scheduler will be invoked, and the read
  * will be re-tried when the operating system
- * says the fd is readable.
+ * says the fd is readable. The read will also 
+ * be re-tried on EINTR.
  *
  * Two tasks trying to perform reads on the same
  * fd at the same time will have undefined behavior,
@@ -148,7 +162,9 @@ ssize_t ioctx_read(ioctx_t *ctx, char *buf, size_t bytes);
  *
  *    accept4(ctx->fd, addr, addrlen, SOCK_NONBLOCK|SOCK_CLOEXEC);
  *
- * except that the scheduler will be invoked when EAGAIN is returned.
+ * except that the scheduler will be invoked when EAGAIN is returned, 
+ * and the operation is re-tried on EINTR.
+ *
  * (On platforms that don't support accept4(), the returned file descriptor's
  * flags will be manipulated directly.)
  */
@@ -162,7 +178,6 @@ int ioctx_accept(ioctx_t *ctx, struct sockaddr *addr, socklen_t *addrlen);
  * is not closed, and tasks may immediately re-park themselves
  * on the fd. To permanently invalidate the ioctx, use 
  * ioctx_destroy().
- *
  */
 void ioctx_cancel(ioctx_t *ctx);
 

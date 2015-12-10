@@ -1,18 +1,17 @@
-#include "runtime.h"
-#include <sys/epoll.h>
-#include <unistd.h>
-#include <stdio.h>
-#include <errno.h>
 
 static void io_unpark(task_t *t);
+static int park_and_iowait(task_t **addr);
 
 static int epfd;
-
 static struct epoll_event events[128];
 
 void pollinit(void) {
+create:
 	epfd = epoll_create1(EPOLL_CLOEXEC);
 	if (epfd == -1) {
+		if (errno == EINTR)
+			goto create;
+			
 		perror("epoll_creat1");
 		_exit(1);
 	}
@@ -21,8 +20,15 @@ void pollinit(void) {
 int ioctx_init(int fd, ioctx_t *ctx) {
 	events[0].data.ptr = ctx;
 	events[0].events = EPOLLERR|EPOLLET|EPOLLIN|EPOLLOUT|EPOLLRDHUP|EPOLLHUP;
-	if (epoll_ctl(epfd, EPOLL_CTL_ADD, fd, &events[0]) < 0)
+
+again:
+	if (epoll_ctl(epfd, EPOLL_CTL_ADD, fd, &events[0]) < 0) {
+		if (errno == EINTR)
+			goto again;
+
 		return -1;
+	}
+
 
 	ctx->fd = fd;
 	ctx->writer = NULL;
@@ -31,12 +37,20 @@ int ioctx_init(int fd, ioctx_t *ctx) {
 }
 
 int ioctx_destroy(ioctx_t *ctx) {
-	if (epoll_ctl(epfd, EPOLL_CTL_DEL, ctx->fd, NULL) < 0) 
+epoll_del:
+	if (epoll_ctl(epfd, EPOLL_CTL_DEL, ctx->fd, NULL) < 0) {
+		if (errno == EINTR)
+			goto epoll_del;
+		
 		return -1;
-	
-	if (close(ctx->fd) == -1)
+	}
+fd_close:
+	if (close(ctx->fd) == -1) {
+		if (errno == EINTR)
+			goto fd_close;
+		
 		return -1;
-
+	}
 	ctx->fd = -1;
 	
 	/* don't leak tasks parked on this ioctx */
@@ -44,10 +58,30 @@ int ioctx_destroy(ioctx_t *ctx) {
 	return 0;
 }
 
+int ioctx_accept(ioctx_t *ctx, struct sockaddr *addr, socklen_t *addrlen) {
+	int res;
+try:
+	res = accept4(ctx->fd, addr, addrlen, SOCK_CLOEXEC|SOCK_NONBLOCK);
+	if (res == -1) {
+		switch (errno) {
+		case EAGAIN:
+			if (unlikely(ctx->reader))
+				panic("concurrent calls to accept()");
+
+			if (unlikely(park_and_iowait(&ctx->reader) < 0))
+				return -1;
+
+		case EINTR:
+			goto try;
+		}
+	}
+	return res;
+}
+
 static void poll(int ms) {
 	int nev;
 entry:
-	nev = epoll_wait(epfd, &events[0], 64, ms);
+	nev = epoll_wait(epfd, &events[0], 128, ms);
 	if (nev == -1) {
 		switch (errno) {
 		case EINTR:
@@ -74,11 +108,11 @@ entry:
 		}
 	}
 	/*
-		We have to handle the case in which the
-		user has initialized some (perhaps many)
-		different fds, but is not waiting on many 
-		of them, and has nonetheless managed to park
-		all of the tasks.
+	  We have to handle the case in which the
+	  user has initialized some (perhaps many)
+	  different fds, but is not waiting on many 
+	  of them, and has nonetheless managed to park
+	  all of the tasks.
 	 */
 	if (woke == 0 && ms == -1)
 		goto entry;

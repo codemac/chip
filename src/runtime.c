@@ -1,94 +1,66 @@
+#define _GNU_SOURCE
 #include <stdint.h>
 #include <stddef.h>
+#include <sys/socket.h>
 #include <sys/mman.h>
 #include <signal.h>
 #include <limits.h>
-
-/* 
-   For now, just linux and BSD,
-   and linux is easier to detect,
-   so just try to use kqueue if linux
-   isn't defined.
-
-   The poller defines:
-   void poll(int ms);
-   void pollinit(void);
-
-   And from runtime.h:
-   int ioctx_init(int fd, ioctx_t *ctx);
-   int ioctx_destroy(ioctx_t *ctx);
-*/
-#ifdef __linux__
-#include "runtime_epoll.h"
-#else
-#include "runtime_kqueue.h"
-#include <fcntl.h>
-#endif
+#include <unistd.h>
+#include <stdio.h>
+#include <errno.h>
+#include "runtime.h"
 
 /* run-of-the-mill gcc grossness */
-#define clobber_mem() __asm__("" : : : "memory")
 #define unlikely(expr) __builtin_expect(!!(expr), 0)
 
 /* try not to consume any stack space with runtime assertions */
 #define runtime_assert_msg(expr, str) if (unlikely(!(expr))) \
 	{ __panicstr(str, sizeof(str)-1); }
 
-#define panic(str) __panicstr(str, sizeof(str)-1)
+#define panic(str) __panicstr(str"\n", sizeof(str))
+
+#define BUG_ON(expr) if (unlikely(expr)) panic(#expr)
 
 __attribute__((cold))
 __attribute__((noreturn))
 static void  __panicstr(const char *msg, size_t len) {
-	write(2, msg, len);
+	write(STDERR_FILENO, msg, len);
 	raise(SIGABRT);
 	_exit(1); /* we probably won't get here. */
 }
 
-typedef struct {
-/* N.B. keep in sync with context_{arch}.s  */
+/* --- OS-specific declarations --- */
+
+static void poll(int ms);
+static void pollinit(void);
+
+#ifdef __linux__
+#include <sys/epoll.h>
+#include "runtime_epoll.c"
+#else
+#include <sys/event.h>
+#include <fcntl.h>
+#include "runtime_kqueue.c"
+#endif
+
+/* --- architecture-specific declarations --- */
+
+typedef struct regctx_s regctx_t;
+
+static inline word_t get_arg0(char *stack);
+static inline void setup(regctx_t *ctx, char *stack, void (*retpc)(void), word_t arg0);
+static void _swapctx(regctx_t *save, const regctx_t *load);
+
+__attribute__((noreturn))
+static void _loadctx(const regctx_t *load);
+
 #ifdef __x86_64__
-	word_t rbx;
-	word_t rbp;
-	word_t r10;
-	word_t r11;
-	word_t r12;
-	word_t r13;
-	word_t r14;
-	word_t r15;
-	word_t rsp;
+#include "runtime_amd64.c"
 #elif __arm__
-	word_t r4;
-	word_t r5;
-	word_t r6;
-	word_t r7;
-	word_t r8;
-	word_t r9;
-	word_t r10;
-	word_t r11;
-	word_t r12;
-	word_t r13;
-	word_t r14;
+#include "runtime_arm.c"
 #else
 #error "unsupported arch"
 #endif
-} regctx_t;
-
-/* ABI-specific register/stack setup. Unavoidably hairy. */
-static inline void setup(regctx_t *ctx, word_t stack, word_t retpc) {
-	/*  the top word is magic, and most ABIs require two-word alignment */
-	stack.val -= 2*sizeof(uintptr_t);
-#ifdef __x86_64__
-	ctx->rsp = stack;
-	*(uintptr_t *)stack.ptr = retpc.val;
-#elif __arm__
-	ctx->r13 = stack;
-	ctx->r14 = retpc;
-#endif
-}
-
-extern void _swapctx(regctx_t *save, const regctx_t *load);
-
-__attribute__((noreturn))
-extern void _loadctx(const regctx_t *load);
 
 /* possible task statuses */
 enum {
@@ -107,8 +79,7 @@ struct task_s {
 	int        index;  /* index in arena */
 	regctx_t   ctx;    /* saved register state, if not running */
 	void       (*start)(word_t); 
-	word_t     udata; /* passed to task->start() */
-	void       *stack;
+	char       *stack;
 	arena_t    *arena;
 };
 
@@ -146,15 +117,22 @@ struct arena_s {
    +------------------------------- ... ----------+
  */
 static arena_t *map_arena(void) {
-	void *mem = mmap(NULL, ARENA_MAPPING, PROT_READ|PROT_WRITE,
+	char *mem;
+
+do_map_arena:
+	mem = mmap(NULL, ARENA_MAPPING, PROT_READ|PROT_WRITE,
 			 MAP_PRIVATE|MAP_ANON, -1, 0);
-	if (unlikely(mem == MAP_FAILED))
+	if (unlikely(mem == MAP_FAILED)) {
+		if (errno == EINTR)
+			goto do_map_arena;
+		
 		return NULL;
-	
+	}
+
 	arena_t *out = (arena_t *)(mem + ARENA_STACK_MAPPING);
 
 	for (int i=0; i<ARENA_TASKS; ++i) {
-		void *bottom = mem + (i * STACK_SIZE);
+		char *bottom = mem + (i * STACK_SIZE);
 		out->tasks[i].stack = bottom + STACK_SIZE;
 		out->tasks[i].arena = out;
 		out->tasks[i].index = i;
@@ -169,8 +147,8 @@ static arena_t *map_arena(void) {
    if it is faulted back in.)
  */
 static void soft_offline_arena(arena_t *arena) {
-	void *top = arena;
-	void *base = top - ARENA_STACK_MAPPING;
+	char *top = (char *)arena;
+	char *base = top - ARENA_STACK_MAPPING;
 	int flags;
 
 	/*
@@ -196,14 +174,12 @@ static void soft_offline_arena(arena_t *arena) {
 /* get task or abort */
 static task_t *arena_get_task(arena_t *arena) {
 	uintptr_t v = ~(arena->bits);
-	runtime_assert_msg(v, "alloc from full arena");
+	BUG_ON(v == 0);
 	int index = __builtin_ffsl(v)-1;
 	task_t *out = &arena->tasks[index];
 
-	runtime_assert_msg(out->status == STATUS_EMPTY,
-			   "fresh task isn't empty");
-	runtime_assert_msg(out->index == index,
-			   "inconsistent task index");
+	BUG_ON(out->status != STATUS_EMPTY);
+	BUG_ON(out->index != index);
 
 	/* set index bit  */
 	arena->bits |= ((uintptr_t)1<<index);
@@ -214,7 +190,8 @@ static void arena_put_task(task_t *task) {
 	arena_t *arena = task->arena;
 	uintptr_t old = arena->bits;
 	arena->bits &= ~((uintptr_t)1<<(task->index));
-	runtime_assert_msg(arena->bits != old, "double-free");
+	/* catch double-free */
+	BUG_ON(arena->bits == old);
 }
 
 /* The task heap. */
@@ -314,8 +291,7 @@ static void arena_unlink(arena_t **head, arena_t *arena) {
 
 /* release a task back to the heap */
 static void free_task(task_t *task) {
-	runtime_assert_msg(task->status == STATUS_EMPTY,
-			   "free of non-empty task");
+	BUG_ON(task->status != STATUS_EMPTY);
 	arena_t *arena = task->arena;
 	int was_full = arena_is_full(arena);
 	arena_put_task(task);
@@ -363,8 +339,7 @@ static void add_stats_from(arena_t *arena, tsk_stats_t *stats) {
 				stats->runnable++;
 				break;
 			case STATUS_RUNNING:
-				runtime_assert_msg(running == 0,
-						   "more than 1 running task");
+				BUG_ON(running != 0);
 				running = 1;
 				break;
 			default:
@@ -399,10 +374,8 @@ void get_tsk_stats(tsk_stats_t *stats) {
 	add_stats_from(theap.partial, stats);
 	add_stats_from(theap.empty, stats);
 
-	runtime_assert_msg(stats->parked == runq.parked,
-			   "bad bookkeeping on parked tasks");
-	runtime_assert_msg(stats->iowait == runq.iowait,
-			   "bad bookkeeping on i/o tasks");
+	BUG_ON(stats->parked != runq.parked);
+	BUG_ON(stats->iowait != runq.iowait);
 }
 
 static task_t *list_pop(tasklist_t *tl) {
@@ -412,7 +385,7 @@ static task_t *list_pop(tasklist_t *tl) {
 	task_t *out = tl->top;
 	tl->top = out->next;
 	if (tl->top == NULL) {
-		runtime_assert_msg(out == tl->tail, "bad worklist state");
+		BUG_ON(out != tl->tail);
 		tl->tail = NULL;
 	}
 	out->next = NULL;
@@ -421,12 +394,12 @@ static task_t *list_pop(tasklist_t *tl) {
 
 static void list_pushback(tasklist_t *tl, task_t *task) {
 	if (tl->top == NULL) {
-		runtime_assert_msg(tl->tail == NULL, "bad worklist state");
+		BUG_ON(tl->tail != NULL);
 		tl->top = task;
 		tl->tail = task;
 		return;
 	}
-	runtime_assert_msg(tl->tail, "bad worklist state");
+	BUG_ON(tl->tail == NULL);
 	tl->tail->next = task;
 	tl->tail = task;
 	task->next = NULL;
@@ -449,10 +422,14 @@ static task_t *find_work(int must) {
 			/* now we've proven we need to allocate */
 			work = task_handoff(new_task());
 		} else if (must) {
-			runtime_assert_msg(runq.iowait, "deadlock");
+			if (unlikely(runq.iowait == 0))
+				panic("deadlock");
+
 		        poll(-1); /* TODO: timers */
 			work = list_pop(&runq.queue);
-			runtime_assert_msg(work, "deadlock");
+			if (unlikely(work == NULL))
+				panic("deadlock");
+
 		}
 	}
 	return work;
@@ -460,8 +437,9 @@ static task_t *find_work(int must) {
 
 static inline void smashing_check(task_t *task) {
 	uintptr_t magic = *(uintptr_t *)(task->stack - sizeof(uintptr_t));
-	runtime_assert_msg(magic == stack_magic(task),
-			   "stack overflow detected");
+	if (unlikely(magic != stack_magic(task))) 
+		panic("stack overflow detected!");
+
 }
 
 /* to de-schedule, set runq.running->status, then call swtch(find_work(1)) */
@@ -475,22 +453,20 @@ static void swtch(task_t *next) {
 		return;
 	}
 	
-	runtime_assert_msg(next->status == STATUS_RUNNABLE,
-			  "tried to schedule unrunnable task");
-
+	BUG_ON(next->status != STATUS_RUNNABLE);
 	smashing_check(next);
-
 	next->status = STATUS_RUNNING;
 	task_t *me = runq.running;
 	runq.running = next;
 	_swapctx(&me->ctx, &next->ctx);
-	clobber_mem();
 	return;
 }
 
 static int yield(int block, tasklist_t *target) {
 	task_t *next = find_work(block);
-	if (next == NULL) return 0;
+	if (next == NULL) 
+		return 0;
+
 	list_pushback(target, runq.running);
 	swtch(next);
 	return 1;
@@ -515,24 +491,20 @@ static void ready(task_t *task) {
 }
 
 static void unpark(task_t *task) {
-	runtime_assert_msg(task->status == STATUS_PARKED,
-			   "unpark of unparked task");
+	BUG_ON(task->status != STATUS_PARKED);
 	--runq.parked;
 	ready(task);
 }
 
 static void io_unpark(task_t *task) {
-	runtime_assert_msg(task->status == STATUS_IOWAIT,
-			   "unpark of unparked task");
+	BUG_ON(task->status != STATUS_IOWAIT);
 	--runq.iowait;
 	ready(task);
 }
 
 /* schedule the target task *immediately* with i/o cancellation */
 static void io_cancel_now(task_t *task) {
-	runtime_assert_msg(task->status == STATUS_IOWAIT,
-			   "io cancelation of task not in iowait");
-
+	BUG_ON(task->status != STATUS_IOWAIT);
 	task->next = MAP_FAILED;
 	task->status = STATUS_RUNNABLE;
 	--runq.iowait;
@@ -541,8 +513,7 @@ static void io_cancel_now(task_t *task) {
 }
 
 int wake(tasklist_t *tl) {
-	runtime_assert_msg(tl != &runq.queue,
-			  "wake called on worklist");
+	BUG_ON(tl == &runq.queue);
 	task_t *task = list_pop(tl);
 	if (task)
 		unpark(task);
@@ -552,22 +523,24 @@ int wake(tasklist_t *tl) {
 
 int wakeall(tasklist_t *tl) {
 	int out = 0;
-	while (wake(tl)) ++out;
+	while (wake(tl)) 
+		++out;
+	
 	return out;
 }
 
 /* task entry point */
 __attribute__((noreturn))
 static void _sbrt_entry(void) {
-	runq.running->start(runq.running->udata);
+	task_t *self = runq.running;
+	self->start(get_arg0(self->stack));
 	_sbrt_exit();
 }
 
 /* longjmp into a task (abandon the current one) */
 __attribute__((noreturn))
 static void run(task_t *task) {
-	runtime_assert_msg(task->status == STATUS_RUNNABLE,
-			  "run() called on unrunnable task");
+	BUG_ON(task->status != STATUS_RUNNABLE);
 	smashing_check(task);
 	runq.running = task;
 	task->status = STATUS_RUNNING;
@@ -579,11 +552,9 @@ __attribute__((noreturn))
 static void _sbrt_exit(void) {
 	/* free/clear old task state */
 	task_t *old = runq.running;
-	runtime_assert_msg(old->status == STATUS_RUNNING,
-			   "runq.running is not running");
+	BUG_ON(old->status != STATUS_RUNNING);
 	old->status = STATUS_EMPTY;
 	old->start = NULL;
-	old->udata.ptr = NULL;
 
 	task_t *target;
 	if (runq.begin.top) {
@@ -597,8 +568,6 @@ static void _sbrt_exit(void) {
 
 void spawn(void (*start)(word_t), word_t data) {
 	task_t *t;
-	word_t stack;
-	word_t retpc;
 	
 	if (runq.begin.top || runq.queue.top) {
 		wait(&runq.begin);
@@ -608,12 +577,11 @@ void spawn(void (*start)(word_t), word_t data) {
 		t = new_task();
 	}
 
-	runtime_assert_msg(t, "out of memory");
-	t->udata = data;
+	if (unlikely(t == NULL))
+		panic("out of memory");
+
 	t->start = start;
-	stack.ptr = t->stack;
-	retpc.ptr = _sbrt_entry;
-	setup(&t->ctx, stack, retpc);
+	setup(&t->ctx, t->stack, _sbrt_entry, data);
 	ready(t);
 	return;
 }
@@ -644,27 +612,6 @@ void ioctx_cancel(ioctx_t *ctx) {
 	
 }
 
-int ioctx_accept(ioctx_t *ctx, struct sockaddr *addr, socklen_t *addrlen) {
-	int res;
-try:
-#ifdef __linux__
-	res = accept4(ctx->fd, addr, addrlen, SOCK_CLOEXEC|SOCK_NONBLOCK);
-#else
-	res = accept(ctx->fd, addr, addrlen);
-#endif
-	if (res == -1 && errno == EAGAIN) {
-		runtime_assert_msg(ctx->reader == NULL, "concurrent calls to accept()");
-		park_and_iowait(&ctx->reader);
-		goto try;
-	}
-#ifndef __linux__
-	if (res > 0) {
-		fcntl(res, F_SETFL, O_CLOEXEC|O_NONBLOCK|(fcntl(res, F_GETFL)));
-	}
-#endif
-	return res;
-}
-
 ssize_t ioctx_write(ioctx_t *ctx, char *buf, size_t bytes) {
 	if (unlikely(ctx->fd == -1)) {
 		errno = ECANCELED;
@@ -673,15 +620,18 @@ ssize_t ioctx_write(ioctx_t *ctx, char *buf, size_t bytes) {
 	ssize_t amt;
 try:
 	amt = write(ctx->fd, buf, bytes);
-	if ((amt == -1) && (errno == EAGAIN)) {
-		runtime_assert_msg(ctx->writer == NULL,
-				   "multiple writers on an ioctx");
+	if (amt == -1) {
+		switch (errno) {
+		case EAGAIN:
+			if (unlikely(ctx->writer))
+				panic("concurrent calls to ioctx_write()");
 
-		if (park_and_iowait(&ctx->writer) < 0) {
-			return -1;
+			if (unlikely(park_and_iowait(&ctx->writer) < 0))
+				return -1;
+
+		case EINTR:
+			goto try;
 		}
-		
-		goto try;
 	}
 	return amt;
 }
@@ -690,14 +640,18 @@ ssize_t ioctx_read(ioctx_t *ctx, char *buf, size_t max) {
 	ssize_t amt;
 try:
 	amt = read(ctx->fd, buf, max);
-	if ((amt == -1) && (errno == EAGAIN)) {
-		runtime_assert_msg(ctx->reader == NULL,
-				   "multiple readers on an ioctx");
+	if (amt == -1) {
+		switch (errno) {
+		case EAGAIN:
+			if (unlikely(ctx->reader))
+				panic("concurrent calls to ioctx_read()");
 
-		if (park_and_iowait(&ctx->reader) < 0)
-			return -1;
-		
-		goto try;
+			if (unlikely(park_and_iowait(&ctx->reader) < 0))
+				return -1;
+
+		case EINTR:
+			goto try;
+		}
 	}
 	return amt;
 }
@@ -713,7 +667,7 @@ void chip_init(void) {
 	   in order to make the stack-smashing 
 	   detector happy.
 	 */
-	runq.t0.stack = ((void *)(&runq.t0_magic)) + sizeof(uintptr_t);
+	runq.t0.stack = ((char *)&runq.t0_magic) + sizeof(uintptr_t);
 	runq.t0_magic = stack_magic(&runq.t0);
 	pollinit();
 }
