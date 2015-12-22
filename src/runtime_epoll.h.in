@@ -1,3 +1,4 @@
+#include <sys/epoll.h>
 
 static void io_unpark(task_t *t);
 static int park_and_iowait(task_t **addr);

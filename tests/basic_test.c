@@ -1,8 +1,8 @@
 #include <stdio.h>
 #include <assert.h>
-#include "../chip.h"
+#include <chip/chip.h>
 
-/* 
+/*
  * spawn more than MAXTASKS
  * tasks, just to get some
  * coverage of task exhaustion.

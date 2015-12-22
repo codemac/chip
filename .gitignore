@@ -5,3 +5,5 @@
 *.out
 *.gch
 *.o
+/.tup
+/build-*

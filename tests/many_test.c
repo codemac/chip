@@ -1,6 +1,6 @@
 #include <stdio.h>
 #include <assert.h>
-#include "../chip.h"
+#include <chip/chip.h>
 
 /* 
  * spawn() this many tasks that all

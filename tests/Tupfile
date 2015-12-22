@@ -1,0 +1,15 @@
+include_rules
+
+LD_STATIC_LIBS += $(ROOT)/src/libchip.a
+
+: foreach *.c |> !cc |> %B.o {objs}
+: foreach {objs} | $(LD_STATIC_LIBS) |> !ld |> %B
+
+ifeq (@(TESTRUN),y)
+: foreach *_test |> ./%f |> 
+endif
+
+ifeq (@(BENCHRUN),y)
+: foreach *_bench |> ./%f |> 
+endif
+

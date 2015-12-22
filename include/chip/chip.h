@@ -1,7 +1,7 @@
 #ifndef __CHIP_H_
 #define __CHIP_H_
-#include "runtime.h"
 #include <assert.h>
+#include "runtime.h"
 
 const word_t __zero_arg;
 

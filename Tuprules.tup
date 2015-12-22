@@ -1,0 +1,19 @@
+.gitignore
+
+ROOT = $(TUP_CWD)
+
+CC = @(CC)
+LD = @(CC)
+
+CFLAGS += -Wall -Werror -std=c11 -g -O3 -pedantic-errors @(CFLAGS)
+
+LDFLAGS += @(LDFLAGS)
+INCLUDES += -I$(ROOT)/include @(INCLUDES)
+
+!cc = |> ^ cc %f^ $(CC) $(CFLAGS) $(CFLAGS_%f) $(INCLUDES) -c %f -o %o |> %B.o
+
+# we use gcc-ar for flto in .a file support
+!ar = |> ^ ar %f^ @(AR) crs %o %f |>
+!ld = |> ^ ld %f^ $(CC) $(LDFLAGS) $(LDFLAGS_%f) -o %o %f $(LD_STATIC_LIBS) |>
+!cp = |> ^ cp %f -> %o^ cp %f %o |>
+

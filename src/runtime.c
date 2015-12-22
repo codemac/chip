@@ -8,7 +8,8 @@
 #include <unistd.h>
 #include <stdio.h>
 #include <errno.h>
-#include "runtime.h"
+
+#include <chip/runtime.h>
 
 /* run-of-the-mill gcc grossness */
 #define unlikely(expr) __builtin_expect(!!(expr), 0)
@@ -34,14 +35,8 @@ static void  __panicstr(const char *msg, size_t len) {
 static void poll(int ms);
 static void pollinit(void);
 
-#ifdef __linux__
-#include <sys/epoll.h>
-#include "runtime_epoll.c"
-#else
-#include <sys/event.h>
-#include <fcntl.h>
-#include "runtime_kqueue.c"
-#endif
+
+#include "runtime_poller.h"
 
 /* --- architecture-specific declarations --- */
 
@@ -54,13 +49,7 @@ static void _swapctx(regctx_t *save, const regctx_t *load);
 __attribute__((noreturn))
 static void _loadctx(const regctx_t *load);
 
-#ifdef __x86_64__
-#include "runtime_amd64.c"
-#elif __arm__
-#include "runtime_arm.c"
-#else
-#error "unsupported arch"
-#endif
+#include "runtime_arch.h"
 
 /* possible task statuses */
 enum {

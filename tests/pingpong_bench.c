@@ -1,6 +1,6 @@
 #include <time.h>
 #include <stdio.h>
-#include "chip/chip.h"
+#include <chip/chip.h>
 
 void pong(word_t arg) {
 	for (;;) {

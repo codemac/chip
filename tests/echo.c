@@ -7,7 +7,7 @@
 #ifndef __linux__
 #include <fcntl.h>
 #endif
-#include "chip/chip.h"
+#include <chip/chip.h>
 
 #define please(expr) if ((expr) == -1) { perror(#expr); _exit(1); }
 

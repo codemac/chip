@@ -1,0 +1,10 @@
+include_rules
+
+RUNTIME_SOURCE = runtime.c
+
+: runtime_@(POLLER).h.in |> !cp |> runtime_poller.h {headers}
+: runtime_@(ARCH).h.in |> !cp |> runtime_arch.h {headers}
+
+: $(RUNTIME_SOURCE) | {headers} |> !cc |> {runtimeobjs}
+: {runtimeobjs} |> !ar |> libchip.a
+
